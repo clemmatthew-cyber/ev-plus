@@ -34,7 +34,7 @@ const ODDS_API_KEY = "a03c63d84fa0e5dd7141a9b0b389b6bf";
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const PROXY_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-const BOOKS = "draftkings,fanduel,betmgm,caesars,pointsbetus";
+const BOOKS = "draftkings,fanduel,betmgm,caesars,pointsbetus,fanatics";
 
 function parseGameOdds(raw: any[]): GameOdds[] {
   return raw.map((g) => ({
@@ -155,7 +155,7 @@ export function findBestLine(
 }
 
 const BOOK_NAMES: Record<string, string> = {
-  draftkings: "DK", fanduel: "FD", betmgm: "MGM", caesars: "CZR", pointsbetus: "PB",
+  draftkings: "DK", fanduel: "FD", betmgm: "MGM", caesars: "CZR", pointsbetus: "PB", fanatics: "FAN",
 };
 export const bookName = (k: string) => BOOK_NAMES[k] || k.toUpperCase().slice(0, 3);
 
