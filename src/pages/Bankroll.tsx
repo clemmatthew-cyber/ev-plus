@@ -59,8 +59,8 @@ interface BalancePoint {
   balance: number;
 }
 
-function buildBalanceSeries(days: DayBucket[]): BalancePoint[] {
-  let balance = STARTING_BANKROLL;
+function buildBalanceSeries(days: DayBucket[], startingBankroll: number): BalancePoint[] {
+  let balance = startingBankroll;
   const pts: BalancePoint[] = [{ date: "Start", balance }];
   for (const d of days) {
     balance += d.pnl;
@@ -122,7 +122,7 @@ export default function Bankroll() {
   };
 
   const days = useMemo(() => bucketByDay(bets), [bets]);
-  const balanceSeries = useMemo(() => buildBalanceSeries(days), [days]);
+  const balanceSeries = useMemo(() => buildBalanceSeries(days, STARTING_BANKROLL), [days, STARTING_BANKROLL]);
 
   const resolved = bets.filter(b => b.result !== "pending");
   const totalPL = resolved.reduce((s, b) => s + b.profitLoss, 0);
