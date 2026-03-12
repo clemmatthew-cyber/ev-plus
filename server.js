@@ -68,7 +68,7 @@ app.get("/api/odds", async (req, res) => {
       `&regions=us` +
       `&markets=h2h,spreads,totals` +
       `&oddsFormat=american` +
-      `&bookmakers=draftkings,fanduel,betmgm,caesars,pointsbetus`;
+      `&bookmakers=draftkings,fanduel,betmgm,caesars,pointsbetus,fanatics`;
 
     const upstream = await fetch(url);
     if (!upstream.ok) {
