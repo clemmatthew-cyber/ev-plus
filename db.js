@@ -273,6 +273,58 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_alerts_game ON betting_alerts(game_id);
   CREATE INDEX IF NOT EXISTS idx_alerts_unread ON betting_alerts(is_read, is_dismissed);
   CREATE INDEX IF NOT EXISTS idx_alerts_created ON betting_alerts(created_at);
+
+  CREATE TABLE IF NOT EXISTS model_parameters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    param_key TEXT NOT NULL UNIQUE,
+    param_value REAL NOT NULL,
+    default_value REAL NOT NULL,
+    min_bound REAL NOT NULL,
+    max_bound REAL NOT NULL,
+    step_size REAL NOT NULL,
+    description TEXT,
+    is_tunable INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS recalibration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'running',
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    sample_size INTEGER NOT NULL DEFAULT 0,
+    params_evaluated INTEGER NOT NULL DEFAULT 0,
+    params_changed INTEGER NOT NULL DEFAULT 0,
+    baseline_brier REAL,
+    baseline_log_loss REAL,
+    baseline_clv REAL,
+    baseline_roi REAL,
+    baseline_calibration_error REAL,
+    final_brier REAL,
+    final_log_loss REAL,
+    final_clv REAL,
+    final_roi REAL,
+    final_calibration_error REAL,
+    composite_score_before REAL,
+    composite_score_after REAL,
+    duration_ms INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_recal_runs_created ON recalibration_runs(created_at);
+
+  CREATE TABLE IF NOT EXISTS parameter_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    param_key TEXT NOT NULL,
+    old_value REAL NOT NULL,
+    new_value REAL NOT NULL,
+    improvement_pct REAL,
+    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (run_id) REFERENCES recalibration_runs(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_param_history_run ON parameter_history(run_id);
+  CREATE INDEX IF NOT EXISTS idx_param_history_key ON parameter_history(param_key);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -282,6 +334,44 @@ if (bankrollCount.cnt === 0) {
   db.prepare(
     "INSERT INTO bankroll (balance, peak_balance, change_reason) VALUES (?, ?, ?)"
   ).run(3000, 3000, "init");
+}
+
+// ─── Seed model_parameters if empty ───
+
+const TUNABLE_PARAMS = [
+  { key: 'dixonColesRho',       default: -0.04,  min: -0.12,  max: 0.02,   step: 0.01,  desc: 'Dixon-Coles low-score correlation' },
+  { key: 'b2bPenalty',          default: 0.95,   min: 0.88,   max: 0.99,   step: 0.01,  desc: 'Back-to-back lambda penalty' },
+  { key: 'restBonusPerDay',     default: 0.01,   min: 0.005,  max: 0.025,  step: 0.005, desc: 'Per-day rest lambda bonus' },
+  { key: 'goalieConfirmedBoost',default: 8,      min: 2,      max: 15,     step: 1,     desc: 'Confidence boost for confirmed goalie' },
+  { key: 'goalieExpectedPenalty',default: -3,     min: -10,    max: 0,      step: 1,     desc: 'Confidence penalty for expected goalie' },
+  { key: 'goalieUnknownPenalty', default: -10,    min: -20,    max: -3,     step: 1,     desc: 'Confidence penalty for unknown goalie' },
+  { key: 'lineupIncompleteConfidencePenalty', default: -5, min: -15, max: 0, step: 1, desc: 'Confidence penalty for incomplete lineup data' },
+  { key: 'sharpMovementBonus',  default: 5,      min: 1,      max: 12,     step: 1,     desc: 'Confidence bonus when sharp book confirms edge' },
+  { key: 'sharpBookWeight',     default: 0.10,   min: 0.03,   max: 0.20,   step: 0.01,  desc: 'Weight of sportsbook intelligence in confidence scoring' },
+  { key: 'homeIceAdvantage',    default: 0.12,   min: 0.06,   max: 0.20,   step: 0.01,  desc: 'Home ice lambda advantage' },
+  { key: 'goalieImpactScale',   default: 0.08,   min: 0.03,   max: 0.15,   step: 0.01,  desc: 'How much GSAx moves lambdas' },
+  { key: 'disagreementThreshold',default: 0.08,  min: 0.04,   max: 0.15,   step: 0.01,  desc: 'Model-market disagreement threshold' },
+  { key: 'xgWeight',            default: 0.70,   min: 0.50,   max: 0.90,   step: 0.05,  desc: 'xG vs actual goals weight' },
+];
+
+const seedParam = db.prepare(`
+  INSERT OR IGNORE INTO model_parameters (param_key, param_value, default_value, min_bound, max_bound, step_size, description)
+  VALUES (@param_key, @param_value, @default_value, @min_bound, @max_bound, @step_size, @description)
+`);
+
+const paramCount = db.prepare("SELECT COUNT(*) AS cnt FROM model_parameters").get();
+if (paramCount.cnt === 0) {
+  for (const p of TUNABLE_PARAMS) {
+    seedParam.run({
+      param_key: p.key,
+      param_value: p.default,
+      default_value: p.default,
+      min_bound: p.min,
+      max_bound: p.max,
+      step_size: p.step,
+      description: p.desc,
+    });
+  }
 }
 
 // ─── Prepared statements ───
@@ -597,6 +687,61 @@ const stmts = {
     SELECT * FROM betting_alerts WHERE alert_type = ? ORDER BY created_at DESC LIMIT ?
   `),
   cleanupExpiredAlerts: db.prepare("DELETE FROM betting_alerts WHERE expires_at < datetime('now', '-24 hours')"),
+
+  // Model parameters
+  getModelParam: db.prepare("SELECT * FROM model_parameters WHERE param_key = ?"),
+  getAllModelParams: db.prepare("SELECT * FROM model_parameters ORDER BY param_key ASC"),
+  getTunableModelParams: db.prepare("SELECT * FROM model_parameters WHERE is_tunable = 1 ORDER BY param_key ASC"),
+  updateModelParam: db.prepare(`
+    UPDATE model_parameters SET param_value = @param_value, updated_at = datetime('now')
+    WHERE param_key = @param_key
+  `),
+  resetModelParam: db.prepare(`
+    UPDATE model_parameters SET param_value = default_value, updated_at = datetime('now')
+    WHERE param_key = ?
+  `),
+  resetAllModelParams: db.prepare(`
+    UPDATE model_parameters SET param_value = default_value, updated_at = datetime('now')
+  `),
+
+  // Recalibration runs
+  insertRecalibrationRun: db.prepare(`
+    INSERT INTO recalibration_runs (status, trigger_type, sample_size)
+    VALUES (@status, @trigger_type, @sample_size)
+  `),
+  updateRecalibrationRun: db.prepare(`
+    UPDATE recalibration_runs SET
+      status = COALESCE(@status, status),
+      params_evaluated = COALESCE(@params_evaluated, params_evaluated),
+      params_changed = COALESCE(@params_changed, params_changed),
+      baseline_brier = COALESCE(@baseline_brier, baseline_brier),
+      baseline_log_loss = COALESCE(@baseline_log_loss, baseline_log_loss),
+      baseline_clv = COALESCE(@baseline_clv, baseline_clv),
+      baseline_roi = COALESCE(@baseline_roi, baseline_roi),
+      baseline_calibration_error = COALESCE(@baseline_calibration_error, baseline_calibration_error),
+      final_brier = COALESCE(@final_brier, final_brier),
+      final_log_loss = COALESCE(@final_log_loss, final_log_loss),
+      final_clv = COALESCE(@final_clv, final_clv),
+      final_roi = COALESCE(@final_roi, final_roi),
+      final_calibration_error = COALESCE(@final_calibration_error, final_calibration_error),
+      composite_score_before = COALESCE(@composite_score_before, composite_score_before),
+      composite_score_after = COALESCE(@composite_score_after, composite_score_after),
+      duration_ms = COALESCE(@duration_ms, duration_ms),
+      notes = COALESCE(@notes, notes),
+      completed_at = COALESCE(@completed_at, completed_at)
+    WHERE id = @id
+  `),
+  getRecalibrationRun: db.prepare("SELECT * FROM recalibration_runs WHERE id = ?"),
+  getLatestRecalibrationRun: db.prepare("SELECT * FROM recalibration_runs ORDER BY created_at DESC LIMIT 1"),
+  getRecentRecalibrationRuns: db.prepare("SELECT * FROM recalibration_runs ORDER BY created_at DESC LIMIT ?"),
+
+  // Parameter history
+  insertParameterHistory: db.prepare(`
+    INSERT INTO parameter_history (run_id, param_key, old_value, new_value, improvement_pct)
+    VALUES (@run_id, @param_key, @old_value, @new_value, @improvement_pct)
+  `),
+  getParameterHistoryByRun: db.prepare("SELECT * FROM parameter_history WHERE run_id = ? ORDER BY param_key ASC"),
+  getParameterHistoryByKey: db.prepare("SELECT * FROM parameter_history WHERE param_key = ? ORDER BY changed_at DESC LIMIT ?"),
 };
 
 // ─── Exported CRUD helpers ───
@@ -906,6 +1051,68 @@ export function getRecentAlertsByType(alertType, limit = 20) {
 
 export function cleanupExpiredAlerts() {
   return stmts.cleanupExpiredAlerts.run();
+}
+
+// -- Model Parameters --
+
+export function getModelParam(key) {
+  return stmts.getModelParam.get(key) || null;
+}
+
+export function getAllModelParams() {
+  return stmts.getAllModelParams.all();
+}
+
+export function getTunableModelParams() {
+  return stmts.getTunableModelParams.all();
+}
+
+export function updateModelParam(paramKey, paramValue) {
+  return stmts.updateModelParam.run({ param_key: paramKey, param_value: paramValue });
+}
+
+export function resetModelParam(key) {
+  return stmts.resetModelParam.run(key);
+}
+
+export function resetAllModelParams() {
+  return stmts.resetAllModelParams.run();
+}
+
+// -- Recalibration Runs --
+
+export function insertRecalibrationRun(row) {
+  return stmts.insertRecalibrationRun.run(row);
+}
+
+export function updateRecalibrationRun(patch) {
+  return stmts.updateRecalibrationRun.run(patch);
+}
+
+export function getRecalibrationRun(id) {
+  return stmts.getRecalibrationRun.get(id) || null;
+}
+
+export function getLatestRecalibrationRun() {
+  return stmts.getLatestRecalibrationRun.get() || null;
+}
+
+export function getRecentRecalibrationRuns(limit = 10) {
+  return stmts.getRecentRecalibrationRuns.all(limit);
+}
+
+// -- Parameter History --
+
+export function insertParameterHistory(row) {
+  return stmts.insertParameterHistory.run(row);
+}
+
+export function getParameterHistoryByRun(runId) {
+  return stmts.getParameterHistoryByRun.all(runId);
+}
+
+export function getParameterHistoryByKey(key, limit = 20) {
+  return stmts.getParameterHistoryByKey.all(key, limit);
 }
 
 // -- Cleanup --

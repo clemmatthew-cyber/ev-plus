@@ -225,3 +225,35 @@ export interface BettingAlert {
   createdAt: string;
   expiresAt: string | null;
 }
+
+// ─── Recalibration Types ───
+
+export interface ModelParameter {
+  paramKey: string;
+  paramValue: number;
+  defaultValue: number;
+  minBound: number;
+  maxBound: number;
+  description: string;
+  updatedAt: string;
+}
+
+export interface RecalibrationRun {
+  id: number;
+  status: string;
+  triggerType: string;
+  sampleSize: number;
+  paramsEvaluated: number;
+  paramsChanged: number;
+  compositeScoreBefore: number | null;
+  compositeScoreAfter: number | null;
+  createdAt: string;
+  notes: string | null;
+}
+
+export interface ParameterChange {
+  paramKey: string;
+  oldValue: number;
+  newValue: number;
+  improvementPct: number | null;
+}

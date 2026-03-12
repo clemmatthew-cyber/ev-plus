@@ -8,6 +8,9 @@ import type {
   DailyMetric,
   SportsbookMetric,
   GoalieConfirmation,
+  ModelParameter,
+  RecalibrationRun,
+  ParameterChange,
 } from "../lib/types";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -61,6 +64,10 @@ export default function Analytics() {
   const [dailyData, setDailyData] = useState<DailyMetric[]>([]);
   const [sbMetrics, setSbMetrics] = useState<SportsbookMetric[]>([]);
   const [goalieConfs, setGoalieConfs] = useState<(GoalieConfirmation & { gameDate: string })[]>([]);
+  const [modelParams, setModelParams] = useState<ModelParameter[]>([]);
+  const [lastRecalRun, setLastRecalRun] = useState<RecalibrationRun | null>(null);
+  const [recalChanges, setRecalChanges] = useState<ParameterChange[]>([]);
+  const [recalRunning, setRecalRunning] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +145,52 @@ export default function Analytics() {
       fetch(`${API_BASE}/api/goalie-confirmations`)
         .then(r => r.json())
         .then(data => { if (!cancelled) setGoalieConfs(data || []); })
+        .catch(() => {});
+
+      // Fetch recalibration data (non-blocking)
+      fetch(`${API_BASE}/api/recalibration/parameters`)
+        .then(r => r.json())
+        .then(data => {
+          if (cancelled) return;
+          setModelParams(
+            (data.parameters || []).map((p: Record<string, unknown>) => ({
+              paramKey: p.param_key as string,
+              paramValue: p.param_value as number,
+              defaultValue: p.default_value as number,
+              minBound: p.min_bound as number,
+              maxBound: p.max_bound as number,
+              description: p.description as string,
+              updatedAt: p.updated_at as string,
+            }))
+          );
+          if (data.lastRecalibration) {
+            const r = data.lastRecalibration;
+            const run: RecalibrationRun = {
+              id: r.id, status: r.status, triggerType: r.trigger_type,
+              sampleSize: r.sample_size, paramsEvaluated: r.params_evaluated,
+              paramsChanged: r.params_changed,
+              compositeScoreBefore: r.composite_score_before,
+              compositeScoreAfter: r.composite_score_after,
+              createdAt: r.created_at, notes: r.notes,
+            };
+            setLastRecalRun(run);
+            if (run.paramsChanged > 0) {
+              fetch(`${API_BASE}/api/recalibration/history/${run.id}`)
+                .then(r2 => r2.json())
+                .then(d2 => {
+                  if (!cancelled && d2.changes) {
+                    setRecalChanges(d2.changes.map((c: Record<string, unknown>) => ({
+                      paramKey: c.param_key as string,
+                      oldValue: c.old_value as number,
+                      newValue: c.new_value as number,
+                      improvementPct: c.improvement_pct as number | null,
+                    })));
+                  }
+                })
+                .catch(() => {});
+            }
+          }
+        })
         .catch(() => {});
 
       setLoading(false);
@@ -330,6 +383,92 @@ export default function Analytics() {
               ];
             })}
           />
+        </Section>
+      )}
+
+      {/* 10. Adaptive Parameters */}
+      {modelParams.length > 0 && (
+        <Section title="Adaptive Parameters">
+          {lastRecalRun && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 py-2 mb-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-xs font-mono">
+              <span className="text-[#737373]">Last run: {lastRecalRun.createdAt?.split("T")[0] || "—"}</span>
+              <span className={lastRecalRun.status === "completed" ? "text-emerald-400" : lastRecalRun.status === "skipped" ? "text-yellow-400" : "text-[#737373]"}>
+                {lastRecalRun.status.toUpperCase()}
+              </span>
+              <span className="text-[#ededed]">{lastRecalRun.sampleSize} bets</span>
+              <span className="text-[#737373]">{lastRecalRun.paramsChanged} changed</span>
+              {lastRecalRun.compositeScoreBefore !== null && lastRecalRun.compositeScoreAfter !== null && (
+                <span className={lastRecalRun.compositeScoreAfter < lastRecalRun.compositeScoreBefore ? "text-emerald-400" : "text-[#737373]"}>
+                  Score {fmt(lastRecalRun.compositeScoreBefore, 4)} → {fmt(lastRecalRun.compositeScoreAfter, 4)}
+                </span>
+              )}
+            </div>
+          )}
+
+          <Table
+            cols={["Parameter", "Current", "Default", "Updated"]}
+            rows={modelParams.map(p => [
+              p.description || p.paramKey,
+              <span className={p.paramValue !== p.defaultValue ? "text-emerald-400" : "text-[#ededed]"}>
+                {fmt(p.paramValue, 4)}
+              </span>,
+              fmt(p.defaultValue, 4),
+              p.updatedAt?.split("T")[0] || "—",
+            ])}
+          />
+
+          {recalChanges.length > 0 && (
+            <div className="mt-2">
+              <div className="text-[10px] text-[#737373] uppercase tracking-wider mb-1">Recent Changes</div>
+              <Table
+                cols={["Parameter", "Old", "New", "Improvement"]}
+                rows={recalChanges.map(c => [
+                  c.paramKey,
+                  fmt(c.oldValue, 4),
+                  <span className="text-emerald-400">{fmt(c.newValue, 4)}</span>,
+                  c.improvementPct !== null ? <span className="text-emerald-400">+{fmt(c.improvementPct, 1)}%</span> : "—",
+                ])}
+              />
+            </div>
+          )}
+
+          <button
+            className="mt-2 px-3 py-1.5 rounded text-xs font-medium bg-white/[0.06] border border-white/[0.12] text-[#ededed] hover:bg-white/[0.10] disabled:opacity-40"
+            disabled={recalRunning}
+            onClick={async () => {
+              setRecalRunning(true);
+              try {
+                await fetch(`${API_BASE}/api/recalibration/run`, { method: "POST" });
+                // Reload params
+                const data = await fetch(`${API_BASE}/api/recalibration/parameters`).then(r => r.json());
+                setModelParams(
+                  (data.parameters || []).map((p: Record<string, unknown>) => ({
+                    paramKey: p.param_key as string,
+                    paramValue: p.param_value as number,
+                    defaultValue: p.default_value as number,
+                    minBound: p.min_bound as number,
+                    maxBound: p.max_bound as number,
+                    description: p.description as string,
+                    updatedAt: p.updated_at as string,
+                  }))
+                );
+                if (data.lastRecalibration) {
+                  const r = data.lastRecalibration;
+                  setLastRecalRun({
+                    id: r.id, status: r.status, triggerType: r.trigger_type,
+                    sampleSize: r.sample_size, paramsEvaluated: r.params_evaluated,
+                    paramsChanged: r.params_changed,
+                    compositeScoreBefore: r.composite_score_before,
+                    compositeScoreAfter: r.composite_score_after,
+                    createdAt: r.created_at, notes: r.notes,
+                  });
+                }
+              } catch { /* ignore */ }
+              setRecalRunning(false);
+            }}
+          >
+            {recalRunning ? "Running..." : "Recalibrate Now"}
+          </button>
         </Section>
       )}
     </div>

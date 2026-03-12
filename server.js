@@ -10,6 +10,7 @@ import * as db from "./db.js";
 import * as evaluation from "./evaluation.js";
 import * as sportsbook from "./sportsbook-intelligence.js";
 import { runAlertEngine } from "./alert-engine.js";
+import { runRecalibration, getActiveModelConfig } from "./recalibration-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1081,6 +1082,58 @@ app.post("/api/alerts/run", (_req, res) => {
   }
 });
 
+// ─── Recalibration API ───
+
+app.get("/api/recalibration/parameters", (_req, res) => {
+  try {
+    const parameters = db.getAllModelParams();
+    const lastRecalibration = db.getLatestRecalibrationRun();
+    res.json({ ok: true, parameters, lastRecalibration });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch parameters", detail: err.message });
+  }
+});
+
+app.get("/api/recalibration/history", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const runs = db.getRecentRecalibrationRuns(limit);
+    res.json({ ok: true, runs });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch history", detail: err.message });
+  }
+});
+
+app.get("/api/recalibration/history/:runId", (req, res) => {
+  try {
+    const run = db.getRecalibrationRun(parseInt(req.params.runId));
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    const changes = db.getParameterHistoryByRun(run.id);
+    res.json({ ok: true, run, changes });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch run", detail: err.message });
+  }
+});
+
+app.post("/api/recalibration/run", (_req, res) => {
+  try {
+    const result = runRecalibration("manual");
+    res.json(result);
+  } catch (err) {
+    console.error("[recalibration/run] Error:", err.message);
+    res.status(500).json({ ok: false, error: "Recalibration failed", detail: err.message });
+  }
+});
+
+app.post("/api/recalibration/reset", (_req, res) => {
+  try {
+    db.resetAllModelParams();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to reset parameters", detail: err.message });
+  }
+});
+
 // ─── Static files (React dist) ───
 
 app.use(express.static(join(__dirname, "dist")));
@@ -1093,3 +1146,27 @@ app.get("/{*splat}", (_req, res) => {
 app.listen(PORT, () => {
   console.log(`[server] NHL EV+ running on http://localhost:${PORT} (SQLite persistence)`);
 });
+
+// ─── Weekly Recalibration Scheduler ───
+
+const RECAL_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function maybeRunWeeklyRecalibration() {
+  if (process.env.RECALIBRATION_ENABLED === "false") return;
+  const lastRun = db.getLatestRecalibrationRun();
+  if (lastRun) {
+    const lastRunTime = new Date(lastRun.created_at + "Z").getTime();
+    const elapsed = Date.now() - lastRunTime;
+    if (elapsed < RECAL_INTERVAL) return;
+  }
+  console.log("[RECAL] Starting weekly recalibration...");
+  try {
+    const result = runRecalibration("weekly");
+    console.log(`[RECAL] Complete: ${result.paramsChanged ?? 0} params updated in ${result.duration ?? 0}ms`);
+  } catch (err) {
+    console.error("[RECAL] Weekly recalibration failed:", err.message);
+  }
+}
+
+setTimeout(maybeRunWeeklyRecalibration, 30000);
+setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000);
