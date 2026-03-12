@@ -1,77 +1,94 @@
-// ─── Bet Storage — pure in-memory (session-scoped) ───
-// Works everywhere including sandboxed iframes.
-// When running on your own Express server, bets persist within the session.
+// ─── Bet Storage — SQLite-backed via API endpoints ───
+// All mutations go through the Express server which persists to SQLite.
+// This module runs in the BROWSER and calls /api/bets endpoints.
 
 import type { EvBet, TrackedBet } from "./types";
 
-let betsStore: TrackedBet[] = [];
+// Backend proxy base: replaced by deploy_website with proxy path to port 5000
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 export async function getAllBets(): Promise<TrackedBet[]> {
-  return [...betsStore];
+  try {
+    const res = await fetch(`${API_BASE}/api/bets`);
+    if (res.ok) return await res.json();
+  } catch {}
+  return [];
 }
 
 export async function placeBet(ev: EvBet): Promise<void> {
-  const dup = betsStore.find(
-    b => b.gameId === ev.gameId && b.outcome === ev.outcome && b.bestBook === ev.bestBook
-  );
-  if (dup) return;
-
-  betsStore.push({
-    id: `tb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    gameId: ev.gameId,
-    gameTime: ev.gameTime,
-    homeTeam: ev.homeTeam,
-    awayTeam: ev.awayTeam,
-    market: ev.market,
-    outcome: ev.outcome,
-    bestBook: ev.bestBook,
-    oddsAtPick: ev.bestPrice,
-    lineAtPick: ev.bestLine,
-    modelProb: ev.modelProb,
-    impliedProb: ev.impliedProb,
-    fairProb: ev.fairProb,
-    edge: ev.edge,
-    ev: ev.ev,
-    confidenceScore: ev.confidenceScore,
-    confidenceGrade: ev.confidenceGrade,
-    kellyFraction: ev.kellyFraction,
-    stake: ev.suggestedStake,
-    placedAt: new Date().toISOString(),
-    result: "pending",
-    resolvedAt: null,
-    homeScore: null,
-    awayScore: null,
-    periodType: null,
-    profitLoss: 0,
-    closingOdds: null,
-    clv: null,
-  });
+  try {
+    await fetch(`${API_BASE}/api/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId: ev.gameId,
+        gameTime: ev.gameTime,
+        homeTeam: ev.homeTeam,
+        awayTeam: ev.awayTeam,
+        market: ev.market,
+        outcome: ev.outcome,
+        bestBook: ev.bestBook,
+        oddsAtPick: ev.bestPrice,
+        lineAtPick: ev.bestLine,
+        modelProb: ev.modelProb,
+        impliedProb: ev.impliedProb,
+        fairProb: ev.fairProb,
+        edge: ev.edge,
+        ev: ev.ev,
+        confidenceScore: ev.confidenceScore,
+        confidenceGrade: ev.confidenceGrade,
+        kellyFraction: ev.kellyFraction,
+        stake: ev.suggestedStake,
+        placedAt: new Date().toISOString(),
+        result: "pending",
+      }),
+    });
+  } catch {}
 }
 
 export async function unplaceBet(gameId: string, outcome: string, book: string): Promise<void> {
-  betsStore = betsStore.filter(
-    b => !(b.gameId === gameId && b.outcome === outcome && b.bestBook === book && b.result === "pending")
-  );
+  try {
+    await fetch(`${API_BASE}/api/bets/unplace-by-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gameId, outcome, book }),
+    });
+  } catch {}
 }
 
 export async function isBetTracked(gameId: string, outcome: string, book: string): Promise<boolean> {
-  return betsStore.some(b => b.gameId === gameId && b.outcome === outcome && b.bestBook === book);
-}
-
-export async function updateBet(id: string, patch: Partial<TrackedBet>): Promise<void> {
-  const idx = betsStore.findIndex(b => b.id === id);
-  if (idx !== -1) betsStore[idx] = { ...betsStore[idx], ...patch };
-}
-
-export async function bulkUpdate(updates: { id: string; patch: Partial<TrackedBet> }[]): Promise<void> {
-  for (const { id, patch } of updates) {
-    const idx = betsStore.findIndex(b => b.id === id);
-    if (idx !== -1) betsStore[idx] = { ...betsStore[idx], ...patch };
+  try {
+    const bets = await getAllBets();
+    return bets.some(b => b.gameId === gameId && b.outcome === outcome && b.bestBook === book);
+  } catch {
+    return false;
   }
 }
 
+export async function updateBet(id: string, patch: Partial<TrackedBet>): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/bets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+  } catch {}
+}
+
+export async function bulkUpdate(updates: { id: string; patch: Partial<TrackedBet> }[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/bets/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates }),
+    });
+  } catch {}
+}
+
 export async function deleteBet(id: string): Promise<void> {
-  betsStore = betsStore.filter(b => b.id !== id);
+  try {
+    await fetch(`${API_BASE}/api/bets/${id}`, { method: "DELETE" });
+  } catch {}
 }
 
 export function computeSummary(bets: TrackedBet[]): import("./types").TrackerSummary {

@@ -9,6 +9,7 @@
     "preview": "npm run build && npm run start"
   },
   "dependencies": {
+    "better-sqlite3": "^12.6.2",
     "date-fns": "^4.1.0",
     "express": "^5.1.0",
     "lucide-react": "^0.453.0",

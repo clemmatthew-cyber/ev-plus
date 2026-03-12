@@ -8,6 +8,39 @@ import { fetchNhlOdds } from "./odds";
 import { fetchTeamStats, fetchGoalieStats, leagueAverages, leagueAvg } from "./stats";
 import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } from "./model";
 
+// Backend proxy base: replaced by deploy_website with proxy path to port 5000
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
+/** Fire-and-forget: persist model results snapshot to server */
+function saveModelSnapshot(bets: EvBet[], sport: string): void {
+  if (bets.length === 0) return;
+  const snapshotAt = new Date().toISOString();
+  const results = bets.map(b => ({
+    gameId: b.gameId,
+    sport,
+    market: b.market,
+    outcome: b.outcome,
+    modelProb: b.modelProb,
+    fairProb: b.fairProb,
+    impliedProb: b.impliedProb,
+    edge: b.edge,
+    ev: b.ev,
+    bestBook: b.bestBook,
+    bestPrice: b.bestPrice,
+    bestLine: b.bestLine,
+    confidenceScore: b.confidenceScore,
+    confidenceGrade: b.confidenceGrade,
+    kellyFraction: b.kellyFraction,
+    suggestedStake: b.suggestedStake,
+    snapshotAt,
+  }));
+  fetch(`${API_BASE}/api/model-snapshot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ results }),
+  }).catch(() => {});
+}
+
 /**
  * Run the full EV pipeline: fetch data → model → scored bets.
  * Routes to the correct model based on sport.
@@ -25,12 +58,18 @@ export async function runPipeline(
   if (!games.length) return [];
 
   // ── Route by sport ──
+  let bets: EvBet[];
   if (sport === "nhl") {
-    return runNhlPipeline(games, config);
+    bets = await runNhlPipeline(games, config);
   } else {
     // NBA, MMA, and any future sport → devig model
-    return generateNbaEvBets(games, config);
+    bets = generateNbaEvBets(games, config);
   }
+
+  // Persist model results snapshot (fire-and-forget)
+  saveModelSnapshot(bets, sport);
+
+  return bets;
 }
 
 /**
