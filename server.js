@@ -3,6 +3,7 @@
 // SQLite persistence via better-sqlite3 (db.js).
 
 import express from "express";
+import cors from "cors";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as cheerio from "cheerio";
@@ -22,6 +23,10 @@ if (!ODDS_API_KEY) {
   console.error("FATAL: ODDS_API_KEY not set in environment. Create a .env file.");
   process.exit(1);
 }
+
+// ─── CORS (allow external frontends) ───
+
+app.use(cors());
 
 // ─── JSON body parsing (must be before route handlers) ───
 
