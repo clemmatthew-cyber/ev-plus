@@ -94,7 +94,7 @@ export const DEFAULT_CONFIG: ModelConfig = {
   bankroll: 3000,
   peakBankroll: 3000,
   minStake: 10,
-  maxStake: 150,
+  maxStake: Infinity,
 
   minEdge: {
     ml: 0.03,
