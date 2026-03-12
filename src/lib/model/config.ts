@@ -88,6 +88,21 @@ export interface ModelConfig {
   // ─── Lambda Clamping ───
   lambdaMin: number;
   lambdaMax: number;
+
+  // ─── Monte Carlo Simulation ───
+  simCount: number;              // number of simulation iterations (default 50000)
+  otHomeAdvantage: number;       // home team OT/SO win probability (default 0.53)
+
+  // ─── Dixon-Coles ───
+  dixonColesRho: number;         // low-score correlation parameter (default -0.04)
+
+  // ─── Fatigue ───
+  fatigueEnabled: boolean;
+  b2bPenalty: number;            // back-to-back multiplier (default 0.95)
+  restBonusPerDay: number;       // per-day rest bonus (default 0.01)
+  maxRestBonus: number;          // cap on rest bonus (default 1.03)
+  travelPenaltyPerKm: number;   // per-km travel penalty (default 0, disabled)
+  timezonePenaltyPerHour: number; // per-hour TZ penalty (default 0, disabled)
 }
 
 export const DEFAULT_CONFIG: ModelConfig = {
@@ -156,4 +171,19 @@ export const DEFAULT_CONFIG: ModelConfig = {
 
   lambdaMin: 0.8,
   lambdaMax: 5.5,
+
+  // Monte Carlo
+  simCount: 50000,
+  otHomeAdvantage: 0.53,
+
+  // Dixon-Coles
+  dixonColesRho: -0.04,
+
+  // Fatigue
+  fatigueEnabled: true,
+  b2bPenalty: 0.95,
+  restBonusPerDay: 0.01,
+  maxRestBonus: 1.03,
+  travelPenaltyPerKm: 0,
+  timezonePenaltyPerHour: 0,
 };

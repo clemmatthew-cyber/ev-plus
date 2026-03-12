@@ -2,7 +2,10 @@
 // Re-exports everything for clean imports.
 
 export { DEFAULT_CONFIG, type ModelConfig } from "./config";
-export { poissonPmf, poissonVector, buildGrid, mlProb, plProb, totalProb } from "./poisson";  // buildGrid already exported
+export { poissonPmf, poissonVector, buildGrid, buildGridDC, mlProb, plProb, totalProb } from "./poisson";
+export { simulateGame, type SimulationResult } from "./simulation";
+export { dixonColesTau, applyDixonColesToGrid } from "./dixon-coles";
+export { computeFatigueAdjustment, type FatigueAdjustment, type ScheduleEntry } from "./fatigue";
 export { americanToImplied, americanToDecimal, shinDevig, multiplicativeDevig, fairProbForOutcome } from "./devig";
 export { estimateMatchupLambdas, type MatchupLambdas } from "./lambdas";
 export { adjustedKellyFraction, rawKelly, computeStake } from "./kelly";

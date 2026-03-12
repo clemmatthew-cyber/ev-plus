@@ -45,6 +45,50 @@ export function buildGrid(
   return grid;
 }
 
+/**
+ * Build Dixon-Coles-corrected probability grid.
+ * Applies low-score correlation correction then renormalizes.
+ */
+export function buildGridDC(
+  homeLam: number,
+  awayLam: number,
+  max: number,
+  rho: number,
+): number[][] {
+  const grid = buildGrid(homeLam, awayLam, max);
+  applyDixonColesToGridInline(grid, homeLam, awayLam, rho);
+  return grid;
+}
+
+/** Inline Dixon-Coles grid correction (avoids circular import with dixon-coles.ts). */
+function applyDixonColesToGridInline(
+  grid: number[][],
+  homeLam: number,
+  awayLam: number,
+  rho: number,
+): void {
+  // Apply tau to (0,0), (1,0), (0,1), (1,1)
+  if (grid.length > 1 && grid[0].length > 1) {
+    grid[0][0] *= 1 - homeLam * awayLam * rho;
+    grid[1][0] *= 1 + awayLam * rho;
+    grid[0][1] *= 1 + homeLam * rho;
+    grid[1][1] *= 1 - rho;
+  }
+  // Renormalize
+  const maxH = grid.length - 1;
+  const maxA = grid[0].length - 1;
+  let total = 0;
+  for (let h = 0; h <= maxH; h++)
+    for (let a = 0; a <= maxA; a++)
+      total += grid[h][a];
+  if (total > 0 && total !== 1) {
+    const scale = 1 / total;
+    for (let h = 0; h <= maxH; h++)
+      for (let a = 0; a <= maxA; a++)
+        grid[h][a] *= scale;
+  }
+}
+
 // ─── Grid-based probability functions (accept pre-built grid) ───
 // All functions accept either (lambda, lambda, max) for convenience
 // or a pre-built grid for efficiency when computing multiple markets.

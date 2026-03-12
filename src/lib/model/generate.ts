@@ -10,9 +10,11 @@ import { getStarter } from "../stats";
 
 import type { ModelConfig } from "./config";
 import { estimateMatchupLambdas } from "./lambdas";
-import { buildGrid, mlProb, plProb, totalProb } from "./poisson";
+import { buildGrid, buildGridDC, mlProb, plProb, totalProb } from "./poisson";
 import { computeStake } from "./kelly";
 import { computeConfidence } from "./confidence";
+import { simulateGame, type SimulationResult } from "./simulation";
+import { computeFatigueAdjustment, type ScheduleEntry } from "./fatigue";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -42,6 +44,7 @@ export interface GenerateInput {
   lg: LeagueAverages;
   lgGoalsPerGame: number;
   config: ModelConfig;
+  recentGames?: ScheduleEntry[];
 }
 
 /**
@@ -57,7 +60,7 @@ export interface GenerateInput {
  * 7. Return sorted by edge descending
  */
 export function generateEvBets(input: GenerateInput): EvBet[] {
-  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg } = input;
+  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames } = input;
   const hasStats = stats.size > 0;
   const hasGoalies = goalies.size > 0;
   const max = cfg.poissonMaxGoals;
@@ -78,16 +81,47 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     const aGoalie = hasGoalies ? getStarter(goalies, aA) : null;
 
     // ── Estimate lambdas ──
-    const { homeLam, awayLam, hasGoalieData } = hS && aS
+    let { homeLam, awayLam, hasGoalieData } = hS && aS
       ? estimateMatchupLambdas(hS, aS, hGoalie, aGoalie, lg, lgAvgGsax, cfg)
       : { homeLam: lgGoalsPerGame / 2, awayLam: lgGoalsPerGame / 2, hasGoalieData: false };
+
+    // ── Apply fatigue adjustment ──
+    const fatigue = computeFatigueAdjustment(
+      game.commenceTime, hA, aA, recentGames ?? [], {
+        fatigueEnabled: cfg.fatigueEnabled,
+        b2bPenalty: cfg.b2bPenalty,
+        restBonusPerDay: cfg.restBonusPerDay,
+        maxRestBonus: cfg.maxRestBonus,
+        travelPenaltyPerKm: cfg.travelPenaltyPerKm,
+        timezonePenaltyPerHour: cfg.timezonePenaltyPerHour,
+      },
+    );
+    homeLam *= fatigue.homeFactor;
+    awayLam *= fatigue.awayFactor;
 
     const hGP = hS?.gamesPlayed ?? 40;
     const aGP = aS?.gamesPlayed ?? 40;
 
-    // Build Poisson grid ONCE per game — reused across all markets
-    const homeGrid = buildGrid(homeLam, awayLam, max);
-    const awayGrid = buildGrid(awayLam, homeLam, max);
+    // ── Try Monte Carlo simulation as primary engine ──
+    let sim: SimulationResult | null = null;
+    try {
+      sim = simulateGame(homeLam, awayLam, {
+        simCount: cfg.simCount,
+        otHomeAdvantage: cfg.otHomeAdvantage,
+        dixonColesRho: cfg.dixonColesRho,
+      });
+      // Validate result
+      if (!isFinite(sim.homeWinProb) || !isFinite(sim.awayWinProb) ||
+          sim.homeWinProb <= 0 || sim.awayWinProb <= 0) {
+        sim = null;
+      }
+    } catch {
+      sim = null;
+    }
+
+    // Build Poisson grid as fallback (with Dixon-Coles correction)
+    const homeGrid = sim ? buildGrid(homeLam, awayLam, max) : buildGridDC(homeLam, awayLam, max, cfg.dixonColesRho);
+    const awayGrid = sim ? buildGrid(awayLam, homeLam, max) : buildGridDC(awayLam, homeLam, max, cfg.dixonColesRho);
 
     // ── Helper: evaluate one bet opportunity ──
     function tryBet(
@@ -143,7 +177,9 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       const bl = findBestLine(game, "h2h", team);
       if (!bl) continue;
       const ab = isHome ? hA : aA;
-      const mp = mlProb(isHome ? homeLam : awayLam, isHome ? awayLam : homeLam, max, isHome ? homeGrid : awayGrid);
+      const mp = sim
+        ? (isHome ? sim.homeWinProb : sim.awayWinProb)
+        : mlProb(isHome ? homeLam : awayLam, isHome ? awayLam : homeLam, max, isHome ? homeGrid : awayGrid);
       tryBet("ml", `${ab} ML`, mp, bl);
     }
 
@@ -157,7 +193,13 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       const bl = findBestLine(game, "spreads", team, spread);
       if (!bl) continue;
       const ab = isHome ? hA : aA;
-      const mp = plProb(isHome ? homeLam : awayLam, isHome ? awayLam : homeLam, spread, max, isHome ? homeGrid : awayGrid);
+      let mp: number;
+      const simSpread = sim?.spreadProbs.get(spread);
+      if (sim && simSpread) {
+        mp = isHome ? simSpread.homeCovers : simSpread.awayCovers;
+      } else {
+        mp = plProb(isHome ? homeLam : awayLam, isHome ? awayLam : homeLam, spread, max, isHome ? homeGrid : awayGrid);
+      }
       tryBet("pl", `PL ${ab} ${spread > 0 ? "+" : ""}${spread}`, mp, bl);
     }
 
@@ -171,7 +213,13 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       for (const [name, isOver] of [["Over", true], ["Under", false]] as [string, boolean][]) {
         const bl = findBestLine(game, "totals", name, line);
         if (!bl) continue;
-        const mp = totalProb(homeLam, awayLam, line, isOver, max, homeGrid);
+        let mp: number;
+        const simTotal = sim?.totalProbs.get(line);
+        if (sim && simTotal) {
+          mp = isOver ? simTotal.over : simTotal.under;
+        } else {
+          mp = totalProb(homeLam, awayLam, line, isOver, max, homeGrid);
+        }
         tryBet("totals", `${name} ${line}`, mp, bl);
       }
     }
