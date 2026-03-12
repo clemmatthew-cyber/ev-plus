@@ -11,6 +11,27 @@ import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } f
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
+/** Upsert all games into SQLite so FK constraints on odds_history / model_results succeed.
+ *  Returns a promise — callers should await before firing odds/model snapshots. */
+async function saveGames(games: { id: string; commenceTime: string; homeTeam: string; awayTeam: string }[], sport: string): Promise<void> {
+  if (games.length === 0) return;
+  try {
+    await fetch(`${API_BASE}/api/games/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        games: games.map(g => ({
+          id: g.id,
+          sport,
+          homeTeam: g.homeTeam,
+          awayTeam: g.awayTeam,
+          commenceTime: g.commenceTime,
+        })),
+      }),
+    });
+  } catch {}
+}
+
 /** Fire-and-forget: persist model results snapshot to server */
 function saveModelSnapshot(bets: EvBet[], sport: string): void {
   if (bets.length === 0) return;
@@ -56,6 +77,9 @@ export async function runPipeline(
   // ── Fetch odds (works for all sports) ──
   const games = await fetchNhlOdds(sport);
   if (!games.length) return [];
+
+  // Upsert all games into SQLite (satisfies odds_history FK) — await to avoid race
+  await saveGames(games, sport);
 
   // ── Route by sport ──
   let bets: EvBet[];

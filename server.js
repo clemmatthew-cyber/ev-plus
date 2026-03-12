@@ -402,6 +402,24 @@ app.post("/api/games", (req, res) => {
   res.json({ ok: true });
 });
 
+// Batch upsert games (called before odds-snapshot / model-snapshot to satisfy FK)
+app.post("/api/games/batch", (req, res) => {
+  const { games } = req.body;
+  if (!Array.isArray(games)) {
+    return res.status(400).json({ error: "games array required" });
+  }
+  db.upsertManyGames(
+    games.map((g) => ({
+      id: g.id,
+      sport: g.sport,
+      home_team: g.homeTeam,
+      away_team: g.awayTeam,
+      commence_time: g.commenceTime,
+    }))
+  );
+  res.json({ ok: true, count: games.length });
+});
+
 app.patch("/api/games/:id", (req, res) => {
   const patch = req.body;
   db.updateGame({
@@ -422,19 +440,24 @@ app.post("/api/odds-snapshot", (req, res) => {
   if (!Array.isArray(snapshots)) {
     return res.status(400).json({ error: "snapshots array required" });
   }
-  db.insertManyOddsSnapshots(
-    snapshots.map((s) => ({
-      game_id: s.gameId,
-      sport: s.sport,
-      book: s.book,
-      market: s.market,
-      outcome_name: s.outcomeName,
-      outcome_point: s.outcomePoint ?? null,
-      price: s.price,
-      snapshot_at: s.snapshotAt,
-    }))
-  );
-  res.json({ ok: true, count: snapshots.length });
+  try {
+    db.insertManyOddsSnapshots(
+      snapshots.map((s) => ({
+        game_id: s.gameId,
+        sport: s.sport,
+        book: s.book,
+        market: s.market,
+        outcome_name: s.outcomeName,
+        outcome_point: s.outcomePoint ?? null,
+        price: s.price,
+        snapshot_at: s.snapshotAt,
+      }))
+    );
+    res.json({ ok: true, count: snapshots.length });
+  } catch (err) {
+    console.error("[odds-snapshot] DB error:", err.message);
+    res.status(500).json({ error: "Failed to insert odds snapshots", detail: err.message });
+  }
 });
 
 app.get("/api/odds-history/:gameId", (req, res) => {
@@ -449,28 +472,33 @@ app.post("/api/model-snapshot", (req, res) => {
   if (!Array.isArray(results)) {
     return res.status(400).json({ error: "results array required" });
   }
-  db.insertManyModelResults(
-    results.map((r) => ({
-      game_id: r.gameId,
-      sport: r.sport,
-      market: r.market,
-      outcome: r.outcome,
-      model_prob: r.modelProb,
-      fair_prob: r.fairProb,
-      implied_prob: r.impliedProb,
-      edge: r.edge,
-      ev: r.ev,
-      best_book: r.bestBook,
-      best_price: r.bestPrice,
-      best_line: r.bestLine ?? null,
-      confidence_score: r.confidenceScore,
-      confidence_grade: r.confidenceGrade,
-      kelly_fraction: r.kellyFraction,
-      suggested_stake: r.suggestedStake,
-      snapshot_at: r.snapshotAt,
-    }))
-  );
-  res.json({ ok: true, count: results.length });
+  try {
+    db.insertManyModelResults(
+      results.map((r) => ({
+        game_id: r.gameId,
+        sport: r.sport,
+        market: r.market,
+        outcome: r.outcome,
+        model_prob: r.modelProb,
+        fair_prob: r.fairProb,
+        implied_prob: r.impliedProb,
+        edge: r.edge,
+        ev: r.ev,
+        best_book: r.bestBook,
+        best_price: r.bestPrice,
+        best_line: r.bestLine ?? null,
+        confidence_score: r.confidenceScore,
+        confidence_grade: r.confidenceGrade,
+        kelly_fraction: r.kellyFraction,
+        suggested_stake: r.suggestedStake,
+        snapshot_at: r.snapshotAt,
+      }))
+    );
+    res.json({ ok: true, count: results.length });
+  } catch (err) {
+    console.error("[model-snapshot] DB error:", err.message);
+    res.status(500).json({ error: "Failed to insert model results", detail: err.message });
+  }
 });
 
 // ─── /api/health ───

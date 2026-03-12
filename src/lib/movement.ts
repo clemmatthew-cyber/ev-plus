@@ -21,8 +21,9 @@ function betKey(b: EvBet): string {
   return `${b.gameId}|${b.outcome}|${b.bestBook}`;
 }
 
-/** Record current odds for all bets. Call on every pipeline refresh. */
-export function recordSnapshot(bets: EvBet[]): void {
+/** Record current odds for all bets. Call on every pipeline refresh.
+ *  @param sport — current sport from settings (used for odds_history persistence) */
+export function recordSnapshot(bets: EvBet[], sport = "nhl"): void {
   const now = Date.now();
   const snapshotAt = new Date(now).toISOString();
 
@@ -42,7 +43,7 @@ export function recordSnapshot(bets: EvBet[]): void {
   if (bets.length > 0) {
     const snapshots = bets.map(b => ({
       gameId: b.gameId,
-      sport: "nhl", // movement tracking is per-refresh; sport is set at pipeline level
+      sport,
       book: b.bestBook,
       market: b.market,
       outcomeName: b.outcome,

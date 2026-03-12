@@ -42,7 +42,7 @@ export default function Board() {
       const result = await runPipeline(sport, { bankroll, peakBankroll });
 
       // Line movement: record snapshot + compute directions
-      recordSnapshot(result);
+      recordSnapshot(result, sport);
       setMovements(getMovementMap(result));
 
       // Notifications: seed on first load, notify on subsequent

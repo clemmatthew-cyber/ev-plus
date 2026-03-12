@@ -223,6 +223,12 @@ export function upsertGame(game) {
   return stmts.upsertGame.run(game);
 }
 
+export const upsertManyGames = db.transaction((games) => {
+  for (const g of games) {
+    stmts.upsertGame.run(g);
+  }
+});
+
 export function updateGame(patch) {
   return stmts.updateGame.run(patch);
 }

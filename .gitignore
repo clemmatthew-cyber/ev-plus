@@ -1,2 +1,7 @@
 node_modules/
 .env
+
+# SQLite runtime DB
+ev-plus.db
+ev-plus.db-shm
+ev-plus.db-wal
