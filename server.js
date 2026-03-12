@@ -211,6 +211,30 @@ app.get("/api/scores/:date", async (req, res) => {
   }
 });
 
+// ─── /api/bankroll ───
+// Simple in-memory bankroll store (persists across requests, resets on server restart)
+
+let bankrollState = { balance: 3000, peakBalance: 3000 };
+
+app.use(express.json());
+
+app.get("/api/bankroll", (_req, res) => {
+  res.json(bankrollState);
+});
+
+app.post("/api/bankroll", (req, res) => {
+  const { balance } = req.body;
+  if (typeof balance !== "number" || balance < 0 || balance > 1_000_000) {
+    return res.status(400).json({ error: "Invalid balance" });
+  }
+  bankrollState.balance = Math.round(balance * 100) / 100;
+  if (bankrollState.balance > bankrollState.peakBalance) {
+    bankrollState.peakBalance = bankrollState.balance;
+  }
+  console.log(`[bankroll] updated to $${bankrollState.balance}`);
+  res.json(bankrollState);
+});
+
 // ─── /api/health ───
 
 app.get("/api/health", (_req, res) => {

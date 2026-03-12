@@ -10,7 +10,7 @@ import { useSettings } from "@/lib/settings";
 import BetRow from "@/components/BetRow";
 
 export default function Board() {
-  const { sport } = useSettings();
+  const { sport, bankroll, peakBankroll } = useSettings();
   const [bets, setBets] = useState<EvBet[]>([]);
   const [movements, setMovements] = useState<Map<string, MovementDir>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -39,7 +39,7 @@ export default function Board() {
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const result = await runPipeline(sport);
+      const result = await runPipeline(sport, { bankroll, peakBankroll });
 
       // Line movement: record snapshot + compute directions
       recordSnapshot(result);

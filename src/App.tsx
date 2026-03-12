@@ -6,6 +6,7 @@ import {
   SettingsContext,
   loadSettings,
   saveSettings,
+  updateBankroll,
   SPORTS,
   type Sport,
   type OddsFormat,
@@ -46,7 +47,16 @@ export default function App() {
     });
   }, []);
 
-  const ctxValue = { ...settings, setSport, setOddsFormat };
+  const setBankroll = useCallback(async (b: number) => {
+    const result = await updateBankroll(b);
+    setSettings(prev => ({
+      ...prev,
+      bankroll: result.balance,
+      peakBankroll: result.peakBalance,
+    }));
+  }, []);
+
+  const ctxValue = { ...settings, setSport, setOddsFormat, setBankroll };
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "board", label: "Board" },

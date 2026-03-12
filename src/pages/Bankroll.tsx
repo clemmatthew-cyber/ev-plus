@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import type { TrackedBet } from "@/lib/types";
 import { getAllBets } from "@/lib/store";
+import { useSettings } from "@/lib/settings";
 import {
   ResponsiveContainer,
   LineChart,
@@ -15,7 +16,7 @@ import {
   ReferenceLine,
 } from "recharts";
 
-const STARTING_BANKROLL = 3000;
+
 
 // ─── Aggregate bets by calendar date ───
 
@@ -92,8 +93,12 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export default function Bankroll() {
+  const { bankroll: STARTING_BANKROLL, setBankroll } = useSettings();
   const [bets, setBets] = useState<TrackedBet[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getAllBets().then(all => {
@@ -101,6 +106,20 @@ export default function Bankroll() {
       setLoading(false);
     });
   }, []);
+
+  const handleEditStart = () => {
+    setEditValue(String(STARTING_BANKROLL));
+    setEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const handleSave = async () => {
+    const val = parseFloat(editValue);
+    if (!isNaN(val) && val >= 0) {
+      await setBankroll(val);
+    }
+    setEditing(false);
+  };
 
   const days = useMemo(() => bucketByDay(bets), [bets]);
   const balanceSeries = useMemo(() => buildBalanceSeries(days), [days]);
@@ -141,9 +160,39 @@ export default function Bankroll() {
 
   if (resolved.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-60 text-sm text-[#737373] gap-2">
-        <span>No resolved bets yet.</span>
-        <span className="text-[11px]">Place and resolve bets from the Board to see your bankroll.</span>
+      <div className="flex flex-col items-center justify-center h-60 gap-4">
+        {/* Editable balance */}
+        <div className="flex flex-col items-center gap-1">
+          <div className="text-[10px] uppercase tracking-wider text-[#737373]">Bankroll</div>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-mono text-[#737373]">$</span>
+              <input
+                ref={inputRef}
+                type="number"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleSave()}
+                className="w-28 bg-white/[0.06] border border-white/10 rounded px-2 py-1 text-lg font-mono font-semibold text-[#ededed] text-center outline-none focus:border-emerald-500/50"
+              />
+              <button
+                onClick={handleSave}
+                className="px-2.5 py-1 text-xs font-medium bg-emerald-600 text-white rounded hover:bg-emerald-500 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleEditStart}
+              className="text-2xl font-mono font-semibold text-[#ededed] hover:text-emerald-400 transition-colors"
+            >
+              ${STARTING_BANKROLL.toLocaleString()}
+            </button>
+          )}
+          {!editing && <div className="text-[10px] text-[#737373]">tap to edit</div>}
+        </div>
+        <div className="text-sm text-[#737373]">No resolved bets yet.</div>
       </div>
     );
   }
@@ -152,11 +201,35 @@ export default function Bankroll() {
     <div className="flex flex-col gap-4 px-4 py-4 overflow-y-auto">
       {/* KPI Row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <KpiCard
-          label="Balance"
-          value={`$${currentBalance.toFixed(0)}`}
-          color={currentBalance >= STARTING_BANKROLL ? "text-emerald-400" : "text-red-400"}
-        />
+        <div className="bg-white/[0.03] rounded-lg px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-[#737373]">Balance</div>
+          {editing ? (
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className="text-sm font-mono text-[#737373]">$</span>
+              <input
+                ref={inputRef}
+                type="number"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleSave()}
+                className="w-20 bg-white/[0.06] border border-white/10 rounded px-1.5 py-0.5 text-sm font-mono font-semibold text-[#ededed] outline-none focus:border-emerald-500/50"
+              />
+              <button
+                onClick={handleSave}
+                className="px-1.5 py-0.5 text-[10px] font-medium bg-emerald-600 text-white rounded hover:bg-emerald-500 transition-colors"
+              >
+                OK
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleEditStart}
+              className={`text-lg font-mono font-semibold ${currentBalance >= STARTING_BANKROLL ? "text-emerald-400" : "text-red-400"} hover:opacity-75 transition-opacity`}
+            >
+              ${currentBalance.toFixed(0)}
+            </button>
+          )}
+        </div>
         <KpiCard
           label="Total P/L"
           value={`${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(0)}`}
