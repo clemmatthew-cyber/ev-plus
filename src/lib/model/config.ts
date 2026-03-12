@@ -65,7 +65,12 @@ export interface ModelConfig {
     bookWeight: number;           // weight for number of books
     priceWeight: number;          // weight for price efficiency (avoid extremes)
     goalieWeight: number;         // weight for goalie data availability
+    sharpBookWeight: number;      // weight for sportsbook intelligence signal
   };
+
+  // ─── Sportsbook Intelligence ───
+  sharpBookEnabled: boolean;
+  sharpMovementBonus: number;     // bonus points when sharp book confirms edge
   confidenceGradeCutoffs: {
     A: number;
     B: number;
@@ -148,13 +153,16 @@ export const DEFAULT_CONFIG: ModelConfig = {
   ppXgBlend: 0.60,
 
   confidence: {
-    edgeWeight: 0.28,
-    agreementWeight: 0.22,
-    depthWeight: 0.14,
-    bookWeight: 0.14,
-    priceWeight: 0.10,
+    edgeWeight: 0.25,
+    agreementWeight: 0.20,
+    depthWeight: 0.12,
+    bookWeight: 0.12,
+    priceWeight: 0.09,
     goalieWeight: 0.12,
+    sharpBookWeight: 0.10,
   },
+  sharpBookEnabled: true,
+  sharpMovementBonus: 5,
   confidenceGradeCutoffs: {
     A: 70,
     B: 50,

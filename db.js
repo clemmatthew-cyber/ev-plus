@@ -174,6 +174,54 @@ db.exec(`
     computed_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_model_metrics(metric_date);
+
+  CREATE TABLE IF NOT EXISTS sportsbook_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book TEXT NOT NULL UNIQUE,
+    total_snapshots INTEGER NOT NULL DEFAULT 0,
+    first_mover_count INTEGER NOT NULL DEFAULT 0,
+    first_mover_freq REAL NOT NULL DEFAULT 0,
+    avg_time_to_move REAL,
+    avg_distance_from_close REAL,
+    avg_clv REAL,
+    outlier_count INTEGER NOT NULL DEFAULT 0,
+    outlier_freq REAL NOT NULL DEFAULT 0,
+    price_efficiency_score REAL NOT NULL DEFAULT 50,
+    sharpness_rank INTEGER,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sportsbook_daily_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_date TEXT NOT NULL,
+    book TEXT NOT NULL,
+    snapshots_count INTEGER NOT NULL DEFAULT 0,
+    first_mover_count INTEGER NOT NULL DEFAULT 0,
+    first_mover_freq REAL NOT NULL DEFAULT 0,
+    avg_distance_from_consensus REAL,
+    outlier_count INTEGER NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(metric_date, book)
+  );
+  CREATE INDEX IF NOT EXISTS idx_sb_daily_date ON sportsbook_daily_metrics(metric_date);
+  CREATE INDEX IF NOT EXISTS idx_sb_daily_book ON sportsbook_daily_metrics(book);
+
+  CREATE TABLE IF NOT EXISTS market_consensus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    outcome_name TEXT NOT NULL,
+    outcome_point REAL,
+    consensus_price REAL NOT NULL,
+    num_books INTEGER NOT NULL,
+    outlier_book TEXT,
+    outlier_distance REAL,
+    first_mover_book TEXT,
+    snapshot_at TEXT NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_consensus_game ON market_consensus(game_id);
+  CREATE INDEX IF NOT EXISTS idx_consensus_snapshot ON market_consensus(snapshot_at);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -355,6 +403,67 @@ const stmts = {
   getDailyMetricsByRange: db.prepare("SELECT * FROM daily_model_metrics WHERE metric_date >= ? AND metric_date <= ? ORDER BY metric_date ASC"),
   getLatestDailyMetrics: db.prepare("SELECT * FROM daily_model_metrics ORDER BY metric_date DESC LIMIT 1"),
 
+  // Sportsbook metrics
+  upsertSportsbookMetrics: db.prepare(`
+    INSERT INTO sportsbook_metrics (
+      book, total_snapshots, first_mover_count, first_mover_freq, avg_time_to_move,
+      avg_distance_from_close, avg_clv, outlier_count, outlier_freq,
+      price_efficiency_score, sharpness_rank
+    ) VALUES (
+      @book, @total_snapshots, @first_mover_count, @first_mover_freq, @avg_time_to_move,
+      @avg_distance_from_close, @avg_clv, @outlier_count, @outlier_freq,
+      @price_efficiency_score, @sharpness_rank
+    ) ON CONFLICT(book) DO UPDATE SET
+      total_snapshots = excluded.total_snapshots,
+      first_mover_count = excluded.first_mover_count,
+      first_mover_freq = excluded.first_mover_freq,
+      avg_time_to_move = excluded.avg_time_to_move,
+      avg_distance_from_close = excluded.avg_distance_from_close,
+      avg_clv = excluded.avg_clv,
+      outlier_count = excluded.outlier_count,
+      outlier_freq = excluded.outlier_freq,
+      price_efficiency_score = excluded.price_efficiency_score,
+      sharpness_rank = excluded.sharpness_rank,
+      computed_at = datetime('now')
+  `),
+  getSportsbookMetrics: db.prepare("SELECT * FROM sportsbook_metrics ORDER BY sharpness_rank ASC"),
+  getSportsbookMetricsByBook: db.prepare("SELECT * FROM sportsbook_metrics WHERE book = ?"),
+
+  // Sportsbook daily metrics
+  upsertSportsbookDaily: db.prepare(`
+    INSERT INTO sportsbook_daily_metrics (
+      metric_date, book, snapshots_count, first_mover_count, first_mover_freq,
+      avg_distance_from_consensus, outlier_count
+    ) VALUES (
+      @metric_date, @book, @snapshots_count, @first_mover_count, @first_mover_freq,
+      @avg_distance_from_consensus, @outlier_count
+    ) ON CONFLICT(metric_date, book) DO UPDATE SET
+      snapshots_count = excluded.snapshots_count,
+      first_mover_count = excluded.first_mover_count,
+      first_mover_freq = excluded.first_mover_freq,
+      avg_distance_from_consensus = excluded.avg_distance_from_consensus,
+      outlier_count = excluded.outlier_count,
+      computed_at = datetime('now')
+  `),
+  getSportsbookDailyByDate: db.prepare("SELECT * FROM sportsbook_daily_metrics WHERE metric_date = ?"),
+  getSportsbookDailyByBook: db.prepare("SELECT * FROM sportsbook_daily_metrics WHERE book = ? ORDER BY metric_date DESC LIMIT ?"),
+
+  // Market consensus
+  insertMarketConsensus: db.prepare(`
+    INSERT INTO market_consensus (
+      game_id, market, outcome_name, outcome_point, consensus_price,
+      num_books, outlier_book, outlier_distance, first_mover_book, snapshot_at
+    ) VALUES (
+      @game_id, @market, @outcome_name, @outcome_point, @consensus_price,
+      @num_books, @outlier_book, @outlier_distance, @first_mover_book, @snapshot_at
+    )
+  `),
+  getMarketConsensusByGame: db.prepare("SELECT * FROM market_consensus WHERE game_id = ? ORDER BY snapshot_at DESC"),
+
+  // Bulk helpers for sportsbook
+  getAllOddsHistory: db.prepare("SELECT * FROM odds_history ORDER BY snapshot_at ASC"),
+  getDistinctOddsGameIds: db.prepare("SELECT DISTINCT game_id FROM odds_history"),
+
   // Model results
   insertModelResult: db.prepare(`
     INSERT INTO model_results (
@@ -529,6 +638,54 @@ export function getDailyMetricsByRange(start, end) {
 
 export function getLatestDailyMetrics() {
   return stmts.getLatestDailyMetrics.get() || null;
+}
+
+// -- Sportsbook Metrics --
+
+export function upsertSportsbookMetrics(row) {
+  return stmts.upsertSportsbookMetrics.run(row);
+}
+
+export function getSportsbookMetrics() {
+  return stmts.getSportsbookMetrics.all();
+}
+
+export function getSportsbookMetricsByBook(book) {
+  return stmts.getSportsbookMetricsByBook.get(book) || null;
+}
+
+// -- Sportsbook Daily Metrics --
+
+export function upsertSportsbookDaily(row) {
+  return stmts.upsertSportsbookDaily.run(row);
+}
+
+export function getSportsbookDailyByDate(date) {
+  return stmts.getSportsbookDailyByDate.all(date);
+}
+
+export function getSportsbookDailyByBook(book, limit = 14) {
+  return stmts.getSportsbookDailyByBook.all(book, limit);
+}
+
+// -- Market Consensus --
+
+export function insertMarketConsensus(row) {
+  return stmts.insertMarketConsensus.run(row);
+}
+
+export function getMarketConsensusByGame(gameId) {
+  return stmts.getMarketConsensusByGame.all(gameId);
+}
+
+// -- Bulk Odds Helpers --
+
+export function getAllOddsHistory() {
+  return stmts.getAllOddsHistory.all();
+}
+
+export function getDistinctOddsGameIds() {
+  return stmts.getDistinctOddsGameIds.all().map(r => r.game_id);
 }
 
 // -- Line Movement & Closing Odds --

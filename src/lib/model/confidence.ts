@@ -33,6 +33,7 @@ export function computeConfidence(
   hasGoalieData: boolean,
   market: "ml" | "pl" | "totals",
   cfg: ModelConfig,
+  sharpBookScore?: number,
 ): ConfidenceResult {
   const minEdge = cfg.minEdge[market];
   const w = cfg.confidence;
@@ -58,6 +59,9 @@ export function computeConfidence(
   // 6. Goalie data quality
   const goalieScore = hasGoalieData ? 100 : 35;
 
+  // 7. Sharp book signal
+  const sbScore = (cfg.sharpBookEnabled && sharpBookScore !== undefined) ? sharpBookScore : 50;
+
   // Weighted sum
   let score =
     edgeScore * w.edgeWeight +
@@ -65,7 +69,8 @@ export function computeConfidence(
     depthScore * w.depthWeight +
     bookScore * w.bookWeight +
     priceScore * w.priceWeight +
-    goalieScore * w.goalieWeight;
+    goalieScore * w.goalieWeight +
+    sbScore * (w.sharpBookWeight ?? 0);
 
   // ── Disagreement penalty/bonus ──
   const disagreeAmt = Math.abs(modelProb - fairProb);
@@ -76,6 +81,11 @@ export function computeConfidence(
   } else if (disagreeAmt < cfg.disagreementThreshold * 0.5) {
     // Bonus when model and market largely agree
     score += cfg.disagreementBonus;
+  }
+
+  // Sharp book movement bonus: when sharp book score is high (>70), add bonus
+  if (cfg.sharpBookEnabled && sharpBookScore !== undefined && sharpBookScore > 70) {
+    score += cfg.sharpMovementBonus;
   }
 
   score = Math.max(0, Math.min(100, score));

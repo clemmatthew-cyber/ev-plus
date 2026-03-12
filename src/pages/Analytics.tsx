@@ -6,6 +6,7 @@ import type {
   ConfidenceBreakdown,
   MarketBreakdown,
   DailyMetric,
+  SportsbookMetric,
 } from "../lib/types";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -57,20 +58,25 @@ export default function Analytics() {
   const [edgeData, setEdgeData] = useState<EdgeBucket[]>([]);
   const [confidenceData, setConfidenceData] = useState<ConfidenceBreakdown[]>([]);
   const [dailyData, setDailyData] = useState<DailyMetric[]>([]);
+  const [sbMetrics, setSbMetrics] = useState<SportsbookMetric[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      // Trigger evaluation first
-      await fetch(`${API_BASE}/api/evaluation/run`, { method: "POST" }).catch(() => {});
+      // Trigger evaluation + sportsbook analysis first
+      await Promise.all([
+        fetch(`${API_BASE}/api/evaluation/run`, { method: "POST" }).catch(() => {}),
+        fetch(`${API_BASE}/api/sportsbook/analyze`, { method: "POST" }).catch(() => {}),
+      ]);
 
       // Fetch all data in parallel
-      const [metricsRes, calRes, edgeRes, confRes, dailyRes] = await Promise.all([
+      const [metricsRes, calRes, edgeRes, confRes, dailyRes, sbRes] = await Promise.all([
         fetch(`${API_BASE}/api/evaluation/metrics`).then(r => r.json()).catch(() => null),
         fetch(`${API_BASE}/api/evaluation/calibration`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/api/evaluation/edge-analysis`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/api/evaluation/confidence-analysis`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/api/evaluation/daily?limit=30`).then(r => r.json()).catch(() => []),
+        fetch(`${API_BASE}/api/sportsbook/metrics`).then(r => r.json()).catch(() => ({ metrics: [] })),
       ]);
 
       if (cancelled) return;
@@ -112,6 +118,20 @@ export default function Analytics() {
         }))
       );
 
+      // Map sportsbook metrics snake_case to camelCase
+      setSbMetrics(
+        ((sbRes?.metrics) || []).map((m: Record<string, unknown>) => ({
+          book: m.book as string,
+          sharpnessRank: m.sharpness_rank as number,
+          priceEfficiencyScore: m.price_efficiency_score as number,
+          firstMoverFreq: m.first_mover_freq as number,
+          avgTimeToMove: m.avg_time_to_move as number | null,
+          avgDistanceFromClose: m.avg_distance_from_close as number | null,
+          avgClv: m.avg_clv as number | null,
+          outlierFreq: m.outlier_freq as number,
+        }))
+      );
+
       setLoading(false);
     }
     load();
@@ -126,7 +146,13 @@ export default function Analytics() {
     );
   }
 
-  if (!metrics || metrics.totalEvaluated === 0) {
+  const BOOK_NAMES: Record<string, string> = {
+    draftkings: "DK", fanduel: "FD", betmgm: "MGM", caesars: "CZR", pointsbetus: "PB", fanatics: "FAN",
+  };
+
+  const hasEvalData = metrics && metrics.totalEvaluated > 0;
+
+  if (!hasEvalData && sbMetrics.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 text-[#737373] text-sm">
         No resolved bets to evaluate yet.
@@ -147,103 +173,130 @@ export default function Analytics() {
 
   return (
     <div className="px-4 py-4 space-y-4 max-w-3xl mx-auto">
-      {/* 1. Summary Cards */}
-      <div className="flex gap-3 overflow-x-auto pb-1">
-        <SummaryCard label="Brier Score" value={fmt(metrics.brierScore, 4)} color={brierColor(metrics.brierScore)} />
-        <SummaryCard label="Log Loss" value={fmt(metrics.logLoss, 4)} color="text-[#ededed]" />
-        <SummaryCard label="ROI" value={fmtPctRaw(metrics.roiPct)} color={plColor(metrics.roiPct)} />
-        <SummaryCard label="Win Rate" value={fmtPct(metrics.winRate)} color={metrics.winRate > 0.5 ? "text-emerald-400" : "text-[#ededed]"} />
-      </div>
+      {hasEvalData && metrics && (
+        <>
+          {/* 1. Summary Cards */}
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            <SummaryCard label="Brier Score" value={fmt(metrics.brierScore, 4)} color={brierColor(metrics.brierScore)} />
+            <SummaryCard label="Log Loss" value={fmt(metrics.logLoss, 4)} color="text-[#ededed]" />
+            <SummaryCard label="ROI" value={fmtPctRaw(metrics.roiPct)} color={plColor(metrics.roiPct)} />
+            <SummaryCard label="Win Rate" value={fmtPct(metrics.winRate)} color={metrics.winRate > 0.5 ? "text-emerald-400" : "text-[#ededed]"} />
+          </div>
 
-      {/* 2. Record & P/L Strip */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 py-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-xs font-mono">
-        <span className="text-[#ededed]">{metrics.wins}W-{metrics.losses}L-{metrics.pushes}P</span>
-        <span className={plColor(metrics.totalPL)}>P/L ${fmt(metrics.totalPL)}</span>
-        <span className="text-[#737373]">Edge {fmtPct(metrics.avgEdge)}</span>
-        <span className="text-[#737373]">CLV {metrics.avgClv !== null ? fmt(metrics.avgClv, 1) : "—"}</span>
-        <span className="text-[#737373]">{metrics.totalEvaluated} bets</span>
-      </div>
+          {/* 2. Record & P/L Strip */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 py-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-xs font-mono">
+            <span className="text-[#ededed]">{metrics.wins}W-{metrics.losses}L-{metrics.pushes}P</span>
+            <span className={plColor(metrics.totalPL)}>P/L ${fmt(metrics.totalPL)}</span>
+            <span className="text-[#737373]">Edge {fmtPct(metrics.avgEdge)}</span>
+            <span className="text-[#737373]">CLV {metrics.avgClv !== null ? fmt(metrics.avgClv, 1) : "—"}</span>
+            <span className="text-[#737373]">{metrics.totalEvaluated} bets</span>
+          </div>
 
-      {/* 3. Calibration Table */}
-      {calibration.length > 0 && (
-        <Section title="Calibration">
-          <Table
-            cols={["Bucket", "Predicted", "Actual", "Count", "ROI"]}
-            rows={calibration.map(b => [
-              b.bucketLabel,
-              fmtPct(b.avgModelProb),
-              <span className={b.actualWinRate > b.avgModelProb ? "text-emerald-400" : b.actualWinRate < b.avgModelProb ? "text-red-400" : ""}>
-                {fmtPct(b.actualWinRate)}
-              </span>,
-              String(b.totalPredictions),
-              <span className={plColor(b.roiPct)}>{fmtPctRaw(b.roiPct)}</span>,
-            ])}
-          />
-        </Section>
+          {/* 3. Calibration Table */}
+          {calibration.length > 0 && (
+            <Section title="Calibration">
+              <Table
+                cols={["Bucket", "Predicted", "Actual", "Count", "ROI"]}
+                rows={calibration.map(b => [
+                  b.bucketLabel,
+                  fmtPct(b.avgModelProb),
+                  <span className={b.actualWinRate > b.avgModelProb ? "text-emerald-400" : b.actualWinRate < b.avgModelProb ? "text-red-400" : ""}>
+                    {fmtPct(b.actualWinRate)}
+                  </span>,
+                  String(b.totalPredictions),
+                  <span className={plColor(b.roiPct)}>{fmtPctRaw(b.roiPct)}</span>,
+                ])}
+              />
+            </Section>
+          )}
+
+          {/* 4. Edge Performance */}
+          {edgeData.some(e => e.count > 0) && (
+            <Section title="Edge Performance">
+              <Table
+                cols={["Edge Range", "Count", "Win Rate", "ROI", "Avg P/L"]}
+                rows={edgeData.filter(e => e.count > 0).map(e => [
+                  e.range,
+                  String(e.count),
+                  fmtPct(e.winRate),
+                  <span className={plColor(e.roi)}>{fmtPctRaw(e.roi)}</span>,
+                  <span className={plColor(e.avgProfit)}>${fmt(e.avgProfit)}</span>,
+                ])}
+              />
+            </Section>
+          )}
+
+          {/* 5. Confidence Grade Breakdown */}
+          {confidenceData.some(c => c.count > 0) && (
+            <Section title="Confidence Grades">
+              <Table
+                cols={["Grade", "Count", "Win Rate", "ROI", "Avg Edge", "Brier"]}
+                rows={confidenceData.filter(c => c.count > 0).map(c => [
+                  <span className={`font-semibold ${gradeColor[c.grade] || ""}`}>{c.grade}</span>,
+                  String(c.count),
+                  fmtPct(c.winRate),
+                  <span className={plColor(c.roi)}>{fmtPctRaw(c.roi)}</span>,
+                  fmtPct(c.avgEdge),
+                  fmt(c.brierScore, 4),
+                ])}
+              />
+            </Section>
+          )}
+
+          {/* 6. Market Breakdown */}
+          {marketEntries.length > 0 && (
+            <Section title="Markets">
+              <Table
+                cols={["Market", "Count", "Win Rate", "ROI", "Brier", "Avg CLV"]}
+                rows={marketEntries.map(m => [
+                  m.market.toUpperCase(),
+                  String(m.count),
+                  fmtPct(m.winRate),
+                  <span className={plColor(m.roi)}>{fmtPctRaw(m.roi)}</span>,
+                  fmt(m.brierScore, 4),
+                  m.avgClv !== null ? fmt(m.avgClv, 1) : "—",
+                ])}
+              />
+            </Section>
+          )}
+
+          {/* 7. Daily Trend */}
+          {recentDaily.length >= 3 && (
+            <Section title="Daily Trend">
+              <Table
+                cols={["Date", "Bets", "W-L", "P/L", "Brier"]}
+                rows={recentDaily.map(d => [
+                  d.date,
+                  String(d.totalEvaluated),
+                  `${d.wins}-${d.losses}`,
+                  <span className={plColor(d.profitLoss as number)}>${fmt(d.profitLoss as number)}</span>,
+                  fmt(d.brierScore, 4),
+                ])}
+              />
+            </Section>
+          )}
+        </>
       )}
 
-      {/* 4. Edge Performance */}
-      {edgeData.some(e => e.count > 0) && (
-        <Section title="Edge Performance">
+      {/* 8. Sportsbook Sharpness */}
+      {sbMetrics.length > 0 && (
+        <Section title="Sportsbook Sharpness">
           <Table
-            cols={["Edge Range", "Count", "Win Rate", "ROI", "Avg P/L"]}
-            rows={edgeData.filter(e => e.count > 0).map(e => [
-              e.range,
-              String(e.count),
-              fmtPct(e.winRate),
-              <span className={plColor(e.roi)}>{fmtPctRaw(e.roi)}</span>,
-              <span className={plColor(e.avgProfit)}>${fmt(e.avgProfit)}</span>,
-            ])}
-          />
-        </Section>
-      )}
-
-      {/* 5. Confidence Grade Breakdown */}
-      {confidenceData.some(c => c.count > 0) && (
-        <Section title="Confidence Grades">
-          <Table
-            cols={["Grade", "Count", "Win Rate", "ROI", "Avg Edge", "Brier"]}
-            rows={confidenceData.filter(c => c.count > 0).map(c => [
-              <span className={`font-semibold ${gradeColor[c.grade] || ""}`}>{c.grade}</span>,
-              String(c.count),
-              fmtPct(c.winRate),
-              <span className={plColor(c.roi)}>{fmtPctRaw(c.roi)}</span>,
-              fmtPct(c.avgEdge),
-              fmt(c.brierScore, 4),
-            ])}
-          />
-        </Section>
-      )}
-
-      {/* 6. Market Breakdown */}
-      {marketEntries.length > 0 && (
-        <Section title="Markets">
-          <Table
-            cols={["Market", "Count", "Win Rate", "ROI", "Brier", "Avg CLV"]}
-            rows={marketEntries.map(m => [
-              m.market.toUpperCase(),
-              String(m.count),
-              fmtPct(m.winRate),
-              <span className={plColor(m.roi)}>{fmtPctRaw(m.roi)}</span>,
-              fmt(m.brierScore, 4),
-              m.avgClv !== null ? fmt(m.avgClv, 1) : "—",
-            ])}
-          />
-        </Section>
-      )}
-
-      {/* 7. Daily Trend */}
-      {recentDaily.length >= 3 && (
-        <Section title="Daily Trend">
-          <Table
-            cols={["Date", "Bets", "W-L", "P/L", "Brier"]}
-            rows={recentDaily.map(d => [
-              d.date,
-              String(d.totalEvaluated),
-              `${d.wins}-${d.losses}`,
-              <span className={plColor(d.profitLoss as number)}>${fmt(d.profitLoss as number)}</span>,
-              fmt(d.brierScore, 4),
-            ])}
+            cols={["Rank", "Book", "Sharpness", "1st Mover", "CLV", "Outlier"]}
+            rows={sbMetrics.map(m => {
+              const scoreColor = m.priceEfficiencyScore > 70 ? "text-emerald-400"
+                : m.priceEfficiencyScore > 50 ? "text-cyan-400"
+                : m.priceEfficiencyScore > 30 ? "text-yellow-400"
+                : "text-red-400";
+              return [
+                String(m.sharpnessRank),
+                BOOK_NAMES[m.book] || m.book,
+                <span className={scoreColor}>{fmt(m.priceEfficiencyScore, 1)}</span>,
+                fmtPct(m.firstMoverFreq),
+                m.avgClv !== null ? <span className={plColor(m.avgClv)}>{fmt(m.avgClv, 1)}</span> : "—",
+                fmtPct(m.outlierFreq),
+              ];
+            })}
           />
         </Section>
       )}

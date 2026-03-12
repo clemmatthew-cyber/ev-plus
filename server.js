@@ -7,6 +7,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as db from "./db.js";
 import * as evaluation from "./evaluation.js";
+import * as sportsbook from "./sportsbook-intelligence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -454,7 +455,24 @@ app.post("/api/odds-snapshot", (req, res) => {
         snapshot_at: s.snapshotAt,
       }))
     );
-    res.json({ ok: true, count: snapshots.length });
+    // Lightweight consensus computation for just-inserted snapshots
+    try {
+      const consensusCount = sportsbook.computeLiveConsensus(
+        snapshots.map((s) => ({
+          game_id: s.gameId,
+          book: s.book,
+          market: s.market,
+          outcome_name: s.outcomeName,
+          outcome_point: s.outcomePoint ?? null,
+          price: s.price,
+          snapshot_at: s.snapshotAt,
+        }))
+      );
+      res.json({ ok: true, count: snapshots.length, consensus: consensusCount });
+    } catch (cErr) {
+      console.error("[odds-snapshot] Consensus error (non-fatal):", cErr.message);
+      res.json({ ok: true, count: snapshots.length });
+    }
   } catch (err) {
     console.error("[odds-snapshot] DB error:", err.message);
     res.status(500).json({ error: "Failed to insert odds snapshots", detail: err.message });
@@ -737,6 +755,40 @@ app.get("/api/evaluation/confidence-analysis", (_req, res) => {
   });
 
   res.json(results);
+});
+
+// ─── Sportsbook Intelligence Routes ───
+
+app.get("/api/sportsbook/metrics", (_req, res) => {
+  const metrics = db.getSportsbookMetrics();
+  res.json({ metrics });
+});
+
+app.get("/api/sportsbook/daily", (req, res) => {
+  const { book, limit } = req.query;
+  if (book) {
+    const daily = db.getSportsbookDailyByBook(book, Number(limit) || 14);
+    res.json({ daily });
+  } else {
+    const today = new Date().toISOString().slice(0, 10);
+    const daily = db.getSportsbookDailyByDate(today);
+    res.json({ daily });
+  }
+});
+
+app.get("/api/sportsbook/consensus/:gameId", (req, res) => {
+  const consensus = db.getMarketConsensusByGame(req.params.gameId);
+  res.json({ consensus });
+});
+
+app.post("/api/sportsbook/analyze", (_req, res) => {
+  try {
+    const summary = sportsbook.runSportsbookAnalysis();
+    res.json({ ok: true, summary });
+  } catch (err) {
+    console.error("[sportsbook/analyze] Error:", err.message);
+    res.status(500).json({ error: "Sportsbook analysis failed", detail: err.message });
+  }
 });
 
 // ─── Static files (React dist) ───

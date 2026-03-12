@@ -45,6 +45,7 @@ export interface GenerateInput {
   lgGoalsPerGame: number;
   config: ModelConfig;
   recentGames?: ScheduleEntry[];
+  sharpBookScores?: Map<string, number>;
 }
 
 /**
@@ -60,7 +61,7 @@ export interface GenerateInput {
  * 7. Return sorted by edge descending
  */
 export function generateEvBets(input: GenerateInput): EvBet[] {
-  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames } = input;
+  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames, sharpBookScores } = input;
   const hasStats = stats.size > 0;
   const hasGoalies = goalies.size > 0;
   const max = cfg.poissonMaxGoals;
@@ -136,9 +137,10 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
 
       const ev = mp * (bl.decimalOdds - 1) - (1 - mp);
 
+      const sbScore = sharpBookScores?.get(bl.book);
       const conf = computeConfidence(
         edge, mp, bl.fairProb, nBooks, hGP, aGP,
-        hasGoalieData, market, cfg,
+        hasGoalieData, market, cfg, sbScore,
       );
 
       const { kellyFraction, stake } = computeStake(mp, bl.decimalOdds, conf.grade, cfg);

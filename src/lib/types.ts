@@ -169,3 +169,16 @@ export interface DailyMetric {
   brierScore: number | null;
   cumulativeRoi: number | null;
 }
+
+// ─── Sportsbook Intelligence Types ───
+
+export interface SportsbookMetric {
+  book: string;
+  sharpnessRank: number;
+  priceEfficiencyScore: number;
+  firstMoverFreq: number;
+  avgTimeToMove: number | null;
+  avgDistanceFromClose: number | null;
+  avgClv: number | null;
+  outlierFreq: number;
+}
