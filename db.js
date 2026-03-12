@@ -106,8 +106,10 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_odds_history_game ON odds_history(game_id);
   CREATE INDEX IF NOT EXISTS idx_odds_history_snapshot ON odds_history(snapshot_at);
+  CREATE INDEX IF NOT EXISTS idx_odds_history_market ON odds_history(game_id, market, outcome_name, book);
   CREATE INDEX IF NOT EXISTS idx_bets_result ON bets(result);
   CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
+  CREATE INDEX IF NOT EXISTS idx_bets_closing ON bets(result, closing_odds);
   CREATE INDEX IF NOT EXISTS idx_model_results_game ON model_results(game_id);
   CREATE INDEX IF NOT EXISTS idx_model_results_snapshot ON model_results(snapshot_at);
 `);
@@ -200,6 +202,34 @@ const stmts = {
   getBankrollHistory: db.prepare(
     "SELECT * FROM bankroll ORDER BY id DESC LIMIT ?"
   ),
+
+  // Line movement & closing odds
+  getOddsMovement: db.prepare(`
+    SELECT book, market, outcome_name, outcome_point, price, snapshot_at
+    FROM odds_history
+    WHERE game_id = ?
+    ORDER BY market, outcome_name, book, snapshot_at ASC
+  `),
+  getLatestOdds: db.prepare(`
+    SELECT price, snapshot_at FROM odds_history
+    WHERE game_id = ? AND market = ? AND outcome_name = ? AND book = ?
+    ORDER BY snapshot_at DESC LIMIT 1
+  `),
+  getClosingOdds: db.prepare(`
+    SELECT price, snapshot_at FROM odds_history
+    WHERE game_id = ? AND market = ? AND outcome_name = ? AND book = ?
+      AND snapshot_at <= ?
+    ORDER BY snapshot_at DESC LIMIT 1
+  `),
+  getClosingOddsAnyBook: db.prepare(`
+    SELECT price, book, snapshot_at FROM odds_history
+    WHERE game_id = ? AND market = ? AND outcome_name = ?
+      AND snapshot_at <= ?
+    ORDER BY snapshot_at DESC LIMIT 1
+  `),
+  getPendingBetsNeedingClosing: db.prepare(`
+    SELECT * FROM bets WHERE result = 'pending' AND closing_odds IS NULL
+  `),
 
   // Model results
   insertModelResult: db.prepare(`
@@ -314,6 +344,53 @@ export const insertManyModelResults = db.transaction((rows) => {
     stmts.insertModelResult.run(row);
   }
 });
+
+// -- Line Movement & Closing Odds --
+
+export function getOddsMovement(gameId) {
+  return stmts.getOddsMovement.all(gameId);
+}
+
+export function getLatestOdds(gameId, market, outcomeName, book) {
+  return stmts.getLatestOdds.get(gameId, market, outcomeName, book) || null;
+}
+
+export function getClosingOdds(gameId, market, outcomeName, book, beforeTime) {
+  return stmts.getClosingOdds.get(gameId, market, outcomeName, book, beforeTime) || null;
+}
+
+export function getClosingOddsAnyBook(gameId, market, outcomeName, beforeTime) {
+  return stmts.getClosingOddsAnyBook.get(gameId, market, outcomeName, beforeTime) || null;
+}
+
+export function getPendingBetsNeedingClosing() {
+  return stmts.getPendingBetsNeedingClosing.all();
+}
+
+export function americanToImplied(odds) {
+  if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
+  return 100 / (odds + 100);
+}
+
+// -- Safe schema migration --
+
+function columnExists(table, column) {
+  const cols = db.pragma(`table_info(${table})`);
+  return cols.some(c => c.name === column);
+}
+
+export function migrateSchema() {
+  // Add any missing columns to existing tables
+  if (!columnExists("bets", "closing_odds")) {
+    db.exec("ALTER TABLE bets ADD COLUMN closing_odds INTEGER");
+  }
+  if (!columnExists("bets", "clv")) {
+    db.exec("ALTER TABLE bets ADD COLUMN clv REAL");
+  }
+}
+
+// Run migration on startup
+migrateSchema();
 
 // -- Cleanup --
 

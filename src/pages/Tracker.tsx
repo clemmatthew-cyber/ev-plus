@@ -116,6 +116,7 @@ export default function Tracker() {
         <div className="flex-1 min-w-[3rem]">Pick</div>
         <div className="hidden sm:block w-12 flex-shrink-0 text-right">Odds</div>
         <div className="w-11 sm:w-12 flex-shrink-0 text-right">Edge</div>
+        <div className="hidden sm:block w-12 flex-shrink-0 text-right">CLV</div>
         <div className="w-6 sm:w-8 flex-shrink-0 text-center">W/L</div>
         <div className="w-14 sm:w-16 flex-shrink-0 text-right">P/L</div>
       </div>
@@ -176,6 +177,11 @@ function TrackerRow({ bet, onDelete }: { bet: TrackedBet; onDelete: () => void }
         <div className="flex-1 min-w-[3rem] text-[#ededed]/90 truncate">{bet.outcome}</div>
         <div className="hidden sm:block w-12 flex-shrink-0 text-right font-mono text-[#737373]">{fmtOdds(bet.oddsAtPick)}</div>
         <div className="w-11 sm:w-12 flex-shrink-0 text-right font-mono text-emerald-600">+{(bet.edge * 100).toFixed(1)}%</div>
+        <div className={`hidden sm:block w-12 flex-shrink-0 text-right font-mono ${
+          bet.clv === null ? "text-[#737373]" : bet.clv > 0 ? "text-emerald-400" : bet.clv < 0 ? "text-red-400" : "text-[#737373]"
+        }`}>
+          {bet.clv !== null ? `${bet.clv > 0 ? "+" : ""}${bet.clv.toFixed(1)}%` : "—"}
+        </div>
         <div className="w-6 sm:w-8 flex-shrink-0 text-center">
           <span className={`inline-block w-5 h-5 leading-5 rounded text-[10px] font-bold ${resultBadge}`}>{resultLabel}</span>
         </div>
@@ -200,8 +206,11 @@ function TrackerRow({ bet, onDelete }: { bet: TrackedBet; onDelete: () => void }
             {bet.homeScore !== null && (
               <div><span className="text-[#737373]">Score</span><span className="ml-2 font-mono text-[#ededed]">{bet.awayTeam} {bet.awayScore} - {bet.homeTeam} {bet.homeScore}{bet.periodType && bet.periodType !== "REG" ? ` (${bet.periodType})` : ""}</span></div>
             )}
+            {bet.closingOdds !== null && (
+              <div><span className="text-[#737373]">Close</span><span className="ml-2 font-mono text-[#ededed]">{fmtOdds(bet.closingOdds)}</span></div>
+            )}
             {bet.clv !== null && (
-              <div><span className="text-[#737373]">CLV</span><span className={`ml-2 font-mono ${bet.clv >= 0 ? "text-emerald-400" : "text-red-400"}`}>{bet.clv > 0 ? "+" : ""}{bet.clv}%</span></div>
+              <div><span className="text-[#737373]">CLV</span><span className={`ml-2 font-mono ${bet.clv >= 0 ? "text-emerald-400" : "text-red-400"}`}>{bet.clv > 0 ? "+" : ""}{bet.clv.toFixed(1)}%</span></div>
             )}
           </div>
           {isPending && (

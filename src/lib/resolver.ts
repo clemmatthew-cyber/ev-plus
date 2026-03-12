@@ -204,35 +204,17 @@ export async function resolveAllPending(): Promise<number> {
   return resolved;
 }
 
-// ─── Capture closing odds for bets whose games are about to start ───
-// Call this periodically. For any pending bet where gameTime is in the past
-// and closingOdds hasn't been set, fetch current odds and store them.
+// ─── Capture closing odds from persisted odds_history ───
+// Calls the server endpoint which finds the last odds snapshot before game time
+// for each pending bet and computes real CLV.
 
 export async function captureClosingOdds(): Promise<void> {
-  const bets = await getAllBets();
-  const now = Date.now();
-  const updates: { id: string; patch: Partial<TrackedBet> }[] = [];
-
-  for (const bet of bets) {
-    if (bet.result !== "pending") continue;
-    if (bet.closingOdds !== null) continue;
-
-    const gameStart = new Date(bet.gameTime).getTime();
-    // If game started within the last 4 hours, capture closing odds
-    // We use the pick odds as a proxy for closing if we can't fetch fresh ones
-    if (now > gameStart && now - gameStart < 4 * 3600_000) {
-      // In a perfect world we'd re-fetch from Odds API here,
-      // but to conserve API calls we use the pick odds as closing odds.
-      // The oddsAtPick is usually close to closing for picks made same-day.
-      // TODO: optionally fetch fresh odds right before game start via a cron
-      updates.push({
-        id: bet.id,
-        patch: { closingOdds: bet.oddsAtPick },
-      });
-    }
-  }
-
-  if (updates.length > 0) {
-    await bulkUpdate(updates);
+  try {
+    await fetch(`${API_BASE}/api/bets/capture-closing-lines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch {
+    // Silently fail — will retry on next cycle
   }
 }

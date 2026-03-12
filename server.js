@@ -501,6 +501,108 @@ app.post("/api/model-snapshot", (req, res) => {
   }
 });
 
+// ─── /api/line-movement/:gameId ───
+// Returns structured movement data: snapshots grouped by market/outcome/book
+
+app.get("/api/line-movement/:gameId", (req, res) => {
+  const { gameId } = req.params;
+  const rows = db.getOddsMovement(gameId);
+
+  if (rows.length === 0) {
+    return res.json({ gameId, movements: [] });
+  }
+
+  // Group by market|outcomeName
+  const grouped = new Map();
+  for (const r of rows) {
+    const key = `${r.market}|${r.outcome_name}|${r.outcome_point ?? ""}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, { market: r.market, outcomeName: r.outcome_name, outcomePoint: r.outcome_point, books: new Map() });
+    }
+    const entry = grouped.get(key);
+    if (!entry.books.has(r.book)) {
+      entry.books.set(r.book, []);
+    }
+    entry.books.get(r.book).push({ price: r.price, at: r.snapshot_at });
+  }
+
+  const movements = [];
+  for (const [, g] of grouped) {
+    const books = {};
+    let totalOpen = 0, totalCurrent = 0, bookCount = 0;
+
+    for (const [book, snaps] of g.books) {
+      const open = snaps[0].price;
+      const current = snaps[snaps.length - 1].price;
+      const magnitude = Math.abs(current - open);
+      const direction = current > open + 2 ? "up" : current < open - 2 ? "down" : "flat";
+      books[book] = { open, current, direction, magnitude, snapshots: snaps };
+      totalOpen += open;
+      totalCurrent += current;
+      bookCount++;
+    }
+
+    const avgOpen = bookCount > 0 ? Math.round(totalOpen / bookCount) : 0;
+    const avgCurrent = bookCount > 0 ? Math.round(totalCurrent / bookCount) : 0;
+    const consensusDir = avgCurrent > avgOpen + 2 ? "up" : avgCurrent < avgOpen - 2 ? "down" : "flat";
+
+    movements.push({
+      market: g.market,
+      outcomeName: g.outcomeName,
+      outcomePoint: g.outcomePoint,
+      books,
+      consensus: { direction: consensusDir, avgOpen, avgCurrent },
+    });
+  }
+
+  res.json({ gameId, movements });
+});
+
+// ─── /api/bets/capture-closing-lines ───
+// Finds closing odds from odds_history for pending bets near game time, computes real CLV
+
+app.post("/api/bets/capture-closing-lines", (_req, res) => {
+  const pendingRows = db.getPendingBetsNeedingClosing();
+  const now = Date.now();
+  let captured = 0;
+
+  for (const row of pendingRows) {
+    const gameStart = new Date(row.game_time).getTime();
+    // Only capture if game time has passed or is within 5 minutes
+    if (now < gameStart - 5 * 60_000) continue;
+
+    // Look for closing odds: last snapshot before game start for this bet's market/outcome/book
+    let closing = db.getClosingOdds(row.game_id, row.market, row.outcome, row.best_book, row.game_time);
+
+    // Fallback: any book for this market/outcome
+    if (!closing) {
+      closing = db.getClosingOddsAnyBook(row.game_id, row.market, row.outcome, row.game_time);
+    }
+
+    if (closing) {
+      const closingPrice = closing.price;
+      const clv = Math.round(
+        (db.americanToImplied(closingPrice) - db.americanToImplied(row.odds_at_pick)) * 1000
+      ) / 10;
+
+      db.updateBet({
+        id: row.id,
+        result: null,
+        resolved_at: null,
+        home_score: null,
+        away_score: null,
+        period_type: null,
+        profit_loss: null,
+        closing_odds: closingPrice,
+        clv,
+      });
+      captured++;
+    }
+  }
+
+  res.json({ ok: true, captured });
+});
+
 // ─── /api/health ───
 
 app.get("/api/health", (_req, res) => {

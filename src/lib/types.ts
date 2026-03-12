@@ -78,5 +78,28 @@ export type SortBy = "edge" | "confidence" | "gameTime";
 export type DayFilter = "all" | string;   // "all" or ISO date "YYYY-MM-DD"
 export type TimeFilter = 7 | 14 | 30 | 9999;
 
+// ─── Line movement data from persisted odds_history ───
+
+export interface BookMovement {
+  open: number;
+  current: number;
+  direction: "up" | "down" | "flat";
+  magnitude: number;
+  snapshots: { price: number; at: string }[];
+}
+
+export interface MovementEntry {
+  market: string;
+  outcomeName: string;
+  outcomePoint: number | null;
+  books: Record<string, BookMovement>;
+  consensus: { direction: "up" | "down" | "flat"; avgOpen: number; avgCurrent: number };
+}
+
+export interface MovementData {
+  gameId: string;
+  movements: MovementEntry[];
+}
+
 // Legacy — keep for backwards compat if anything imports it
 export type BetResult = TrackedBet;

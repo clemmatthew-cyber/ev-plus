@@ -2,7 +2,7 @@
 // Stores odds snapshots in memory for movement arrows,
 // and persists to SQLite via /api/odds-snapshot for historical data.
 
-import type { EvBet } from "./types";
+import type { EvBet, MovementData } from "./types";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -89,4 +89,17 @@ export function getMovementMap(bets: EvBet[]): Map<string, MovementDir> {
     map.set(b.id, getMovement(b));
   }
   return map;
+}
+
+/** Fetch persisted movement data from the server for a specific game.
+ *  This queries odds_history for full historical movement, unlike the in-memory
+ *  ring buffer which only covers the current session. */
+export async function fetchPersistedMovement(gameId: string): Promise<MovementData | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/line-movement/${encodeURIComponent(gameId)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
