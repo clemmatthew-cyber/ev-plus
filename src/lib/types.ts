@@ -103,3 +103,69 @@ export interface MovementData {
 
 // Legacy — keep for backwards compat if anything imports it
 export type BetResult = TrackedBet;
+
+// ─── Model Evaluation & Calibration Types ───
+
+export interface ModelMetrics {
+  brierScore: number | null;
+  logLoss: number | null;
+  winRate: number;
+  roiPct: number;
+  avgEdge: number;
+  avgClv: number | null;
+  totalEvaluated: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  totalPL: number;
+  totalStaked: number;
+}
+
+export interface CalibrationBucket {
+  bucketLabel: string;
+  bucketStart: number;
+  bucketEnd: number;
+  totalPredictions: number;
+  totalWins: number;
+  actualWinRate: number;
+  avgModelProb: number;
+  avgEdge: number;
+  totalProfit: number;
+  roiPct: number;
+}
+
+export interface EdgeBucket {
+  range: string;
+  count: number;
+  winRate: number;
+  roi: number;
+  avgProfit: number;
+}
+
+export interface ConfidenceBreakdown {
+  grade: string;
+  count: number;
+  winRate: number;
+  roi: number;
+  avgEdge: number;
+  brierScore: number | null;
+}
+
+export interface MarketBreakdown {
+  market: string;
+  count: number;
+  winRate: number;
+  roi: number;
+  brierScore: number | null;
+  avgClv: number | null;
+}
+
+export interface DailyMetric {
+  date: string;
+  totalEvaluated: number;
+  wins: number;
+  losses: number;
+  profitLoss: number;
+  brierScore: number | null;
+  cumulativeRoi: number | null;
+}

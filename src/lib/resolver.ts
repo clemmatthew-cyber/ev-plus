@@ -201,6 +201,11 @@ export async function resolveAllPending(): Promise<number> {
     await bulkUpdate(updates);
   }
 
+  // Fire evaluation update (fire-and-forget)
+  if (resolved > 0) {
+    fetch(`${API_BASE}/api/evaluation/run`, { method: "POST" }).catch(() => {});
+  }
+
   return resolved;
 }
 

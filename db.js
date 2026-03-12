@@ -112,6 +112,68 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bets_closing ON bets(result, closing_odds);
   CREATE INDEX IF NOT EXISTS idx_model_results_game ON model_results(game_id);
   CREATE INDEX IF NOT EXISTS idx_model_results_snapshot ON model_results(snapshot_at);
+
+  CREATE TABLE IF NOT EXISTS prediction_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bet_id TEXT NOT NULL UNIQUE,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    model_prob REAL NOT NULL,
+    implied_prob REAL NOT NULL,
+    fair_prob REAL NOT NULL,
+    edge REAL NOT NULL,
+    confidence_score REAL NOT NULL,
+    confidence_grade TEXT NOT NULL,
+    odds_at_pick INTEGER NOT NULL,
+    closing_odds INTEGER,
+    clv REAL,
+    result TEXT NOT NULL,
+    actual_outcome INTEGER NOT NULL,
+    profit_loss REAL NOT NULL,
+    stake REAL NOT NULL,
+    resolved_at TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (bet_id) REFERENCES bets(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pred_eval_resolved ON prediction_evaluations(resolved_at);
+  CREATE INDEX IF NOT EXISTS idx_pred_eval_market ON prediction_evaluations(market);
+  CREATE INDEX IF NOT EXISTS idx_pred_eval_grade ON prediction_evaluations(confidence_grade);
+
+  CREATE TABLE IF NOT EXISTS calibration_buckets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bucket_start REAL NOT NULL,
+    bucket_end REAL NOT NULL,
+    bucket_label TEXT NOT NULL,
+    total_predictions INTEGER NOT NULL DEFAULT 0,
+    total_wins INTEGER NOT NULL DEFAULT 0,
+    actual_win_rate REAL NOT NULL DEFAULT 0,
+    avg_model_prob REAL NOT NULL DEFAULT 0,
+    avg_edge REAL NOT NULL DEFAULT 0,
+    total_profit REAL NOT NULL DEFAULT 0,
+    roi_pct REAL NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS daily_model_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_date TEXT NOT NULL UNIQUE,
+    total_evaluated INTEGER NOT NULL DEFAULT 0,
+    brier_score REAL,
+    log_loss REAL,
+    win_rate REAL,
+    roi_pct REAL,
+    avg_edge REAL,
+    avg_clv REAL,
+    total_profit REAL NOT NULL DEFAULT 0,
+    cumulative_evaluated INTEGER NOT NULL DEFAULT 0,
+    cumulative_brier REAL,
+    cumulative_log_loss REAL,
+    cumulative_win_rate REAL,
+    cumulative_roi REAL,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_model_metrics(metric_date);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -231,6 +293,68 @@ const stmts = {
     SELECT * FROM bets WHERE result = 'pending' AND closing_odds IS NULL
   `),
 
+  // Prediction evaluations
+  insertPredictionEval: db.prepare(`
+    INSERT INTO prediction_evaluations (
+      bet_id, game_id, market, outcome, model_prob, implied_prob, fair_prob,
+      edge, confidence_score, confidence_grade, odds_at_pick, closing_odds,
+      clv, result, actual_outcome, profit_loss, stake, resolved_at
+    ) VALUES (
+      @bet_id, @game_id, @market, @outcome, @model_prob, @implied_prob, @fair_prob,
+      @edge, @confidence_score, @confidence_grade, @odds_at_pick, @closing_odds,
+      @clv, @result, @actual_outcome, @profit_loss, @stake, @resolved_at
+    )
+  `),
+  getPredictionEvalByBetId: db.prepare("SELECT * FROM prediction_evaluations WHERE bet_id = ?"),
+  getAllPredictionEvals: db.prepare("SELECT * FROM prediction_evaluations ORDER BY resolved_at DESC"),
+  getPredictionEvalsByDateRange: db.prepare("SELECT * FROM prediction_evaluations WHERE resolved_at >= ? AND resolved_at <= ? ORDER BY resolved_at DESC"),
+  getPredictionEvalsByMarket: db.prepare("SELECT * FROM prediction_evaluations WHERE market = ? ORDER BY resolved_at DESC"),
+  getPredictionEvalsByGrade: db.prepare("SELECT * FROM prediction_evaluations WHERE confidence_grade = ? ORDER BY resolved_at DESC"),
+  countPredictionEvals: db.prepare("SELECT COUNT(*) AS count FROM prediction_evaluations"),
+
+  // Calibration buckets
+  upsertCalibrationBucket: db.prepare(`
+    INSERT OR REPLACE INTO calibration_buckets (
+      bucket_start, bucket_end, bucket_label, total_predictions, total_wins,
+      actual_win_rate, avg_model_prob, avg_edge, total_profit, roi_pct
+    ) VALUES (
+      @bucket_start, @bucket_end, @bucket_label, @total_predictions, @total_wins,
+      @actual_win_rate, @avg_model_prob, @avg_edge, @total_profit, @roi_pct
+    )
+  `),
+  getAllCalibrationBuckets: db.prepare("SELECT * FROM calibration_buckets ORDER BY bucket_start ASC"),
+  clearCalibrationBuckets: db.prepare("DELETE FROM calibration_buckets"),
+
+  // Daily model metrics
+  upsertDailyMetrics: db.prepare(`
+    INSERT INTO daily_model_metrics (
+      metric_date, total_evaluated, brier_score, log_loss, win_rate, roi_pct,
+      avg_edge, avg_clv, total_profit, cumulative_evaluated, cumulative_brier,
+      cumulative_log_loss, cumulative_win_rate, cumulative_roi
+    ) VALUES (
+      @metric_date, @total_evaluated, @brier_score, @log_loss, @win_rate, @roi_pct,
+      @avg_edge, @avg_clv, @total_profit, @cumulative_evaluated, @cumulative_brier,
+      @cumulative_log_loss, @cumulative_win_rate, @cumulative_roi
+    ) ON CONFLICT(metric_date) DO UPDATE SET
+      total_evaluated = excluded.total_evaluated,
+      brier_score = excluded.brier_score,
+      log_loss = excluded.log_loss,
+      win_rate = excluded.win_rate,
+      roi_pct = excluded.roi_pct,
+      avg_edge = excluded.avg_edge,
+      avg_clv = excluded.avg_clv,
+      total_profit = excluded.total_profit,
+      cumulative_evaluated = excluded.cumulative_evaluated,
+      cumulative_brier = excluded.cumulative_brier,
+      cumulative_log_loss = excluded.cumulative_log_loss,
+      cumulative_win_rate = excluded.cumulative_win_rate,
+      cumulative_roi = excluded.cumulative_roi,
+      computed_at = datetime('now')
+  `),
+  getDailyMetrics: db.prepare("SELECT * FROM daily_model_metrics ORDER BY metric_date DESC LIMIT ?"),
+  getDailyMetricsByRange: db.prepare("SELECT * FROM daily_model_metrics WHERE metric_date >= ? AND metric_date <= ? ORDER BY metric_date ASC"),
+  getLatestDailyMetrics: db.prepare("SELECT * FROM daily_model_metrics ORDER BY metric_date DESC LIMIT 1"),
+
   // Model results
   insertModelResult: db.prepare(`
     INSERT INTO model_results (
@@ -344,6 +468,68 @@ export const insertManyModelResults = db.transaction((rows) => {
     stmts.insertModelResult.run(row);
   }
 });
+
+// -- Prediction Evaluations --
+
+export function insertPredictionEval(row) {
+  return stmts.insertPredictionEval.run(row);
+}
+
+export function getPredictionEvalByBetId(betId) {
+  return stmts.getPredictionEvalByBetId.get(betId) || null;
+}
+
+export function getAllPredictionEvals() {
+  return stmts.getAllPredictionEvals.all();
+}
+
+export function getPredictionEvalsByDateRange(start, end) {
+  return stmts.getPredictionEvalsByDateRange.all(start, end);
+}
+
+export function getPredictionEvalsByMarket(market) {
+  return stmts.getPredictionEvalsByMarket.all(market);
+}
+
+export function getPredictionEvalsByGrade(grade) {
+  return stmts.getPredictionEvalsByGrade.all(grade);
+}
+
+export function countPredictionEvals() {
+  return stmts.countPredictionEvals.get();
+}
+
+// -- Calibration Buckets --
+
+export function upsertCalibrationBucket(row) {
+  return stmts.upsertCalibrationBucket.run(row);
+}
+
+export function getAllCalibrationBuckets() {
+  return stmts.getAllCalibrationBuckets.all();
+}
+
+export function clearCalibrationBuckets() {
+  return stmts.clearCalibrationBuckets.run();
+}
+
+// -- Daily Model Metrics --
+
+export function upsertDailyMetrics(row) {
+  return stmts.upsertDailyMetrics.run(row);
+}
+
+export function getDailyMetrics(limit = 30) {
+  return stmts.getDailyMetrics.all(limit);
+}
+
+export function getDailyMetricsByRange(start, end) {
+  return stmts.getDailyMetricsByRange.all(start, end);
+}
+
+export function getLatestDailyMetrics() {
+  return stmts.getLatestDailyMetrics.get() || null;
+}
 
 // -- Line Movement & Closing Odds --
 

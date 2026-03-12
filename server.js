@@ -6,6 +6,7 @@ import express from "express";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as db from "./db.js";
+import * as evaluation from "./evaluation.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -616,6 +617,126 @@ app.get("/api/health", (_req, res) => {
     db: "sqlite",
     uptime: Math.round(process.uptime()),
   });
+});
+
+// ─── /api/evaluation ───
+
+app.post("/api/evaluation/run", (_req, res) => {
+  try {
+    const result = evaluation.runFullEvaluation();
+    res.json(result);
+  } catch (err) {
+    console.error("[evaluation] run error:", err.message);
+    res.status(500).json({ error: "Evaluation failed", detail: err.message });
+  }
+});
+
+app.get("/api/evaluation/metrics", (_req, res) => {
+  try {
+    const evals = db.getAllPredictionEvals();
+    const overall = evaluation.computeMetrics(evals);
+
+    // By market
+    const markets = new Map();
+    for (const e of evals) {
+      if (!markets.has(e.market)) markets.set(e.market, []);
+      markets.get(e.market).push(e);
+    }
+    const byMarket = {};
+    for (const [market, mEvals] of markets) {
+      byMarket[market] = evaluation.computeMetrics(mEvals);
+    }
+
+    // By grade
+    const grades = new Map();
+    for (const e of evals) {
+      if (!grades.has(e.confidence_grade)) grades.set(e.confidence_grade, []);
+      grades.get(e.confidence_grade).push(e);
+    }
+    const byGrade = {};
+    for (const [grade, gEvals] of grades) {
+      byGrade[grade] = evaluation.computeMetrics(gEvals);
+    }
+
+    res.json({ overall, byMarket, byGrade });
+  } catch (err) {
+    console.error("[evaluation] metrics error:", err.message);
+    res.status(500).json({ error: "Metrics computation failed" });
+  }
+});
+
+app.get("/api/evaluation/calibration", (_req, res) => {
+  const buckets = db.getAllCalibrationBuckets();
+  res.json(buckets);
+});
+
+app.get("/api/evaluation/daily", (req, res) => {
+  const limit = parseInt(req.query.limit) || 30;
+  const rows = db.getDailyMetrics(limit);
+  res.json(rows);
+});
+
+app.get("/api/evaluation/predictions", (req, res) => {
+  let evals = db.getAllPredictionEvals();
+
+  if (req.query.market) {
+    evals = evals.filter(e => e.market === req.query.market);
+  }
+  if (req.query.grade) {
+    evals = evals.filter(e => e.confidence_grade === req.query.grade);
+  }
+
+  const limit = parseInt(req.query.limit) || 50;
+  res.json(evals.slice(0, limit));
+});
+
+app.get("/api/evaluation/edge-analysis", (_req, res) => {
+  const evals = db.getAllPredictionEvals();
+  const edgeBuckets = [
+    { range: "0-2%", min: 0, max: 0.02 },
+    { range: "2-5%", min: 0.02, max: 0.05 },
+    { range: "5-10%", min: 0.05, max: 0.10 },
+    { range: "10%+", min: 0.10, max: Infinity },
+  ];
+
+  const results = edgeBuckets.map(({ range, min, max }) => {
+    const bucket = evals.filter(e => e.edge >= min && e.edge < max);
+    if (bucket.length === 0) return { range, count: 0, winRate: 0, roi: 0, avgProfit: 0 };
+    const wins = bucket.filter(e => e.actual_outcome === 1).length;
+    const nonPush = bucket.filter(e => e.actual_outcome !== -1).length;
+    const totalPL = bucket.reduce((a, e) => a + e.profit_loss, 0);
+    const totalStake = bucket.reduce((a, e) => a + e.stake, 0);
+    return {
+      range,
+      count: bucket.length,
+      winRate: nonPush > 0 ? wins / nonPush : 0,
+      roi: totalStake > 0 ? (totalPL / totalStake) * 100 : 0,
+      avgProfit: totalPL / bucket.length,
+    };
+  });
+
+  res.json(results);
+});
+
+app.get("/api/evaluation/confidence-analysis", (_req, res) => {
+  const evals = db.getAllPredictionEvals();
+  const gradeOrder = ["A", "B", "C", "D"];
+
+  const results = gradeOrder.map(grade => {
+    const bucket = evals.filter(e => e.confidence_grade === grade);
+    if (bucket.length === 0) return { grade, count: 0, winRate: 0, roi: 0, avgEdge: 0, brierScore: null };
+    const metrics = evaluation.computeMetrics(bucket);
+    return {
+      grade,
+      count: bucket.length,
+      winRate: metrics.winRate,
+      roi: metrics.roiPct,
+      avgEdge: metrics.avgEdge,
+      brierScore: metrics.brierScore,
+    };
+  });
+
+  res.json(results);
 });
 
 // ─── Static files (React dist) ───

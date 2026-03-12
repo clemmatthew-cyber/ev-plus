@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import Board from "./pages/Board";
 import Tracker from "./pages/Tracker";
 import Bankroll from "./pages/Bankroll";
+import Analytics from "./pages/Analytics";
 import {
   SettingsContext,
   loadSettings,
@@ -14,7 +15,7 @@ import {
   DEFAULT_SETTINGS,
 } from "./lib/settings";
 
-type Tab = "board" | "tracker" | "bankroll";
+type Tab = "board" | "tracker" | "bankroll" | "analytics";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("board");
@@ -62,6 +63,7 @@ export default function App() {
     { key: "board", label: "Board" },
     { key: "tracker", label: "Tracker" },
     { key: "bankroll", label: "Bankroll" },
+    { key: "analytics", label: "Analytics" },
   ];
 
   if (!loaded) return null;
@@ -144,7 +146,7 @@ export default function App() {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto">
-          {tab === "board" ? <Board /> : tab === "tracker" ? <Tracker /> : <Bankroll />}
+          {tab === "board" ? <Board /> : tab === "tracker" ? <Tracker /> : tab === "bankroll" ? <Bankroll /> : <Analytics />}
         </main>
 
         {/* Safe area bottom */}
