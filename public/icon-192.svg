@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 512 512">
+  <rect width="192" height="192" rx="96" fill="#0a0a0a"/>
+  <rect x="56" y="56" width="400" height="400" rx="64" fill="#22c55e"/>
+  <text x="256" y="300" text-anchor="middle" fill="#0a0a0a" font-family="Inter,sans-serif" font-weight="700" font-size="180">EV+</text>
+</svg>
