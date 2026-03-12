@@ -64,25 +64,35 @@ const PROXY_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 const MP_TEAMS_URL = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/teams.csv";
 const MP_GOALIES_URL = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/goalies.csv";
 
-/** Fetch CSV with fallback: proxy → direct (may CORS-fail) → empty */
-async function fetchCsv(proxyPath: string, directUrl: string): Promise<string> {
-  // Try backend proxy first
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/** Single attempt to fetch CSV: proxy → same-origin → direct */
+async function tryFetchCsv(proxyPath: string, directUrl: string): Promise<string | null> {
   if (PROXY_BASE) {
     try {
       const res = await fetch(`${PROXY_BASE}${proxyPath}`);
       if (res.ok) return await res.text();
     } catch { /* proxy unavailable */ }
   }
-  // Try same-origin proxy (local dev)
   try {
     const res = await fetch(proxyPath);
     if (res.ok) return await res.text();
   } catch { /* not available */ }
-  // Try direct (may fail due to CORS)
   try {
     const res = await fetch(directUrl);
     if (res.ok) return await res.text();
   } catch { /* CORS blocked */ }
+  return null;
+}
+
+/** Fetch CSV with retry for cold starts */
+async function fetchCsv(proxyPath: string, directUrl: string): Promise<string> {
+  const delays = [0, 3000, 5000];
+  for (const delay of delays) {
+    if (delay > 0) await sleep(delay);
+    const result = await tryFetchCsv(proxyPath, directUrl);
+    if (result) return result;
+  }
   return "";
 }
 

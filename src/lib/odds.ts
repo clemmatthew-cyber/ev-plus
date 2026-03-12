@@ -57,32 +57,24 @@ function parseGameOdds(raw: any[]): GameOdds[] {
   }));
 }
 
-export async function fetchNhlOdds(sport = "nhl"): Promise<GameOdds[]> {
-  const sportKey = SPORT_KEYS[sport] || SPORT_KEYS.nhl;
+/** Sleep helper */
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** Try a single fetch attempt across all sources */
+async function tryFetchOdds(sport: string, sportKey: string): Promise<GameOdds[] | null> {
   // 1. Backend proxy first (works in deployed iframe where cross-origin is blocked)
   if (PROXY_BASE) {
     try {
       const res = await fetch(`${PROXY_BASE}/api/odds?sport=${sport}`);
-      if (res.ok) {
-        const raw: any[] = await res.json();
-        return parseGameOdds(raw);
-      }
-    } catch {
-      // proxy unreachable, fall through
-    }
+      if (res.ok) return parseGameOdds(await res.json());
+    } catch { /* proxy unreachable */ }
   }
 
-  // 2. Same-origin backend (local dev)
+  // 2. Same-origin backend (Railway / local dev)
   try {
     const res = await fetch(`/api/odds?sport=${sport}`);
-    if (res.ok) {
-      const raw: any[] = await res.json();
-      return parseGameOdds(raw);
-    }
-  } catch {
-    // ignore
-  }
+    if (res.ok) return parseGameOdds(await res.json());
+  } catch { /* ignore */ }
 
   // 3. Direct Odds API (works in normal browsers with CORS)
   try {
@@ -93,14 +85,22 @@ export async function fetchNhlOdds(sport = "nhl"): Promise<GameOdds[]> {
       `&markets=h2h,spreads,totals` +
       `&oddsFormat=american` +
       `&bookmakers=${BOOKS}`;
-
     const res = await fetch(url);
-    if (res.ok) {
-      const raw: any[] = await res.json();
-      return parseGameOdds(raw);
-    }
-  } catch {
-    // CORS blocked or network error
+    if (res.ok) return parseGameOdds(await res.json());
+  } catch { /* CORS blocked or network error */ }
+
+  return null;
+}
+
+export async function fetchNhlOdds(sport = "nhl"): Promise<GameOdds[]> {
+  const sportKey = SPORT_KEYS[sport] || SPORT_KEYS.nhl;
+
+  // Retry up to 4 times with backoff — handles Railway cold starts (~10-15s)
+  const delays = [0, 3000, 5000, 7000];
+  for (const delay of delays) {
+    if (delay > 0) await sleep(delay);
+    const result = await tryFetchOdds(sport, sportKey);
+    if (result) return result;
   }
 
   throw new Error("Could not reach odds service");
