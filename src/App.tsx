@@ -3,6 +3,7 @@ import Board from "./pages/Board";
 import Tracker from "./pages/Tracker";
 import Bankroll from "./pages/Bankroll";
 import Analytics from "./pages/Analytics";
+import AlertBadge from "./components/AlertBadge";
 import {
   SettingsContext,
   loadSettings,
@@ -126,6 +127,9 @@ export default function App() {
             >
               {settings.oddsFormat === "american" ? "US" : "DEC"}
             </button>
+
+            {/* Alert bell */}
+            <AlertBadge />
 
             {/* Tab nav */}
             <nav className="flex items-center gap-1">

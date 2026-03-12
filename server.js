@@ -9,6 +9,7 @@ import * as cheerio from "cheerio";
 import * as db from "./db.js";
 import * as evaluation from "./evaluation.js";
 import * as sportsbook from "./sportsbook-intelligence.js";
+import { runAlertEngine } from "./alert-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -458,18 +459,31 @@ app.post("/api/odds-snapshot", (req, res) => {
     );
     // Lightweight consensus computation for just-inserted snapshots
     try {
-      const consensusCount = sportsbook.computeLiveConsensus(
-        snapshots.map((s) => ({
-          game_id: s.gameId,
-          book: s.book,
-          market: s.market,
-          outcome_name: s.outcomeName,
-          outcome_point: s.outcomePoint ?? null,
-          price: s.price,
-          snapshot_at: s.snapshotAt,
-        }))
-      );
-      res.json({ ok: true, count: snapshots.length, consensus: consensusCount });
+      const snapshotRows = snapshots.map((s) => ({
+        game_id: s.gameId,
+        book: s.book,
+        market: s.market,
+        outcome_name: s.outcomeName,
+        outcome_point: s.outcomePoint ?? null,
+        price: s.price,
+        snapshot_at: s.snapshotAt,
+      }));
+      const consensusCount = sportsbook.computeLiveConsensus(snapshotRows);
+
+      // Run alert engine on fresh snapshot data
+      let alertCount = 0;
+      try {
+        const bets = db.getAllBets().filter(b => b.result === "pending");
+        const today = new Date().toISOString().slice(0, 10);
+        const goalieConfs = db.getGoalieConfirmationsByDate(today);
+        const alertResult = runAlertEngine(snapshotRows, bets, goalieConfs);
+        alertCount = alertResult.newAlerts;
+        if (alertCount > 0) console.log(`[ALERTS] ${alertCount} new alerts generated`);
+      } catch (aErr) {
+        console.error("[ALERTS] Engine error (non-fatal):", aErr.message);
+      }
+
+      res.json({ ok: true, count: snapshots.length, consensus: consensusCount, alerts: alertCount });
     } catch (cErr) {
       console.error("[odds-snapshot] Consensus error (non-fatal):", cErr.message);
       res.json({ ok: true, count: snapshots.length });
@@ -1008,6 +1022,63 @@ app.get("/api/lineup-adjustments/:date", (req, res) => {
   }
   const rows = db.getLineupAdjustmentsByDate(date);
   res.json({ date, adjustments: rows });
+});
+
+// ─── Alert Routes ───
+
+app.get("/api/alerts", (req, res) => {
+  const type = req.query.type || null;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  let rows = db.getActiveAlerts(type);
+  rows = rows.slice(0, limit);
+  const alerts = rows.map(r => ({
+    id: r.id,
+    alertType: r.alert_type,
+    severity: r.severity,
+    gameId: r.game_id,
+    market: r.market,
+    outcome: r.outcome,
+    book: r.book,
+    headline: r.headline,
+    detail: JSON.parse(r.detail || "{}"),
+    modelEdge: r.model_edge,
+    confidenceScore: r.confidence_score,
+    isRead: !!r.is_read,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  }));
+  const unreadCount = db.getUnreadAlertCount();
+  res.json({ ok: true, alerts, unreadCount });
+});
+
+app.get("/api/alerts/count", (_req, res) => {
+  const unreadCount = db.getUnreadAlertCount();
+  res.json({ ok: true, unreadCount });
+});
+
+app.post("/api/alerts/:id/read", (req, res) => {
+  db.markAlertRead(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+app.post("/api/alerts/:id/dismiss", (req, res) => {
+  db.markAlertDismissed(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+app.post("/api/alerts/run", (_req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    // Get latest odds snapshots from today
+    const allOdds = db.getAllOddsHistory().filter(r => r.snapshot_at.startsWith(today));
+    const bets = db.getAllBets().filter(b => b.result === "pending");
+    const goalieConfs = db.getGoalieConfirmationsByDate(today);
+    const result = runAlertEngine(allOdds, bets, goalieConfs);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[alerts/run] Error:", err.message);
+    res.status(500).json({ error: "Alert engine failed", detail: err.message });
+  }
 });
 
 // ─── Static files (React dist) ───

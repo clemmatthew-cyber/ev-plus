@@ -203,3 +203,25 @@ export interface SportsbookMetric {
   avgClv: number | null;
   outlierFreq: number;
 }
+
+// ─── Betting Alert Types ───
+
+export type AlertType = 'stale_book' | 'sharp_move' | 'confirmed_goalie_ev' | 'market_disagreement';
+export type AlertSeverity = 'high' | 'medium' | 'low';
+
+export interface BettingAlert {
+  id: number;
+  alertType: AlertType;
+  severity: AlertSeverity;
+  gameId: string;
+  market: string | null;
+  outcome: string | null;
+  book: string | null;
+  headline: string;
+  detail: Record<string, any>;
+  modelEdge: number | null;
+  confidenceScore: number | null;
+  isRead: boolean;
+  createdAt: string;
+  expiresAt: string | null;
+}

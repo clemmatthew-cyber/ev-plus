@@ -249,6 +249,30 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_lineup_adj_date ON lineup_adjustments(game_date);
   CREATE INDEX IF NOT EXISTS idx_lineup_adj_team ON lineup_adjustments(team);
+
+  CREATE TABLE IF NOT EXISTS betting_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium',
+    game_id TEXT NOT NULL,
+    market TEXT,
+    outcome TEXT,
+    book TEXT,
+    headline TEXT NOT NULL,
+    detail TEXT,
+    model_edge REAL,
+    confidence_score REAL,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    is_dismissed INTEGER NOT NULL DEFAULT 0,
+    webhook_sent INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT,
+    FOREIGN KEY (game_id) REFERENCES games(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_alerts_type ON betting_alerts(alert_type);
+  CREATE INDEX IF NOT EXISTS idx_alerts_game ON betting_alerts(game_id);
+  CREATE INDEX IF NOT EXISTS idx_alerts_unread ON betting_alerts(is_read, is_dismissed);
+  CREATE INDEX IF NOT EXISTS idx_alerts_created ON betting_alerts(created_at);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -540,6 +564,39 @@ const stmts = {
       @confidence_grade, @kelly_fraction, @suggested_stake, @snapshot_at
     )
   `),
+
+  // Betting alerts
+  insertAlert: db.prepare(`
+    INSERT INTO betting_alerts (
+      alert_type, severity, game_id, market, outcome, book, headline, detail,
+      model_edge, confidence_score, expires_at
+    ) VALUES (
+      @alert_type, @severity, @game_id, @market, @outcome, @book, @headline, @detail,
+      @model_edge, @confidence_score, @expires_at
+    )
+  `),
+  getActiveAlerts: db.prepare(`
+    SELECT * FROM betting_alerts
+    WHERE is_dismissed = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))
+    ORDER BY created_at DESC
+  `),
+  getActiveAlertsByType: db.prepare(`
+    SELECT * FROM betting_alerts
+    WHERE is_dismissed = 0 AND (expires_at IS NULL OR expires_at > datetime('now')) AND alert_type = ?
+    ORDER BY created_at DESC
+  `),
+  getAlertsByGame: db.prepare("SELECT * FROM betting_alerts WHERE game_id = ? ORDER BY created_at DESC"),
+  getUnreadAlertCount: db.prepare(`
+    SELECT COUNT(*) AS count FROM betting_alerts
+    WHERE is_read = 0 AND is_dismissed = 0 AND (expires_at IS NULL OR expires_at > datetime('now'))
+  `),
+  markAlertRead: db.prepare("UPDATE betting_alerts SET is_read = 1 WHERE id = ?"),
+  markAlertDismissed: db.prepare("UPDATE betting_alerts SET is_dismissed = 1 WHERE id = ?"),
+  markAlertWebhookSent: db.prepare("UPDATE betting_alerts SET webhook_sent = 1 WHERE id = ?"),
+  getRecentAlertsByType: db.prepare(`
+    SELECT * FROM betting_alerts WHERE alert_type = ? ORDER BY created_at DESC LIMIT ?
+  `),
+  cleanupExpiredAlerts: db.prepare("DELETE FROM betting_alerts WHERE expires_at < datetime('now', '-24 hours')"),
 };
 
 // ─── Exported CRUD helpers ───
@@ -811,6 +868,45 @@ export function migrateSchema() {
 
 // Run migration on startup
 migrateSchema();
+
+// -- Betting Alerts --
+
+export function insertAlert(row) {
+  return stmts.insertAlert.run(row);
+}
+
+export function getActiveAlerts(type) {
+  if (type) return stmts.getActiveAlertsByType.all(type);
+  return stmts.getActiveAlerts.all();
+}
+
+export function getAlertsByGame(gameId) {
+  return stmts.getAlertsByGame.all(gameId);
+}
+
+export function getUnreadAlertCount() {
+  return stmts.getUnreadAlertCount.get().count;
+}
+
+export function markAlertRead(id) {
+  return stmts.markAlertRead.run(id);
+}
+
+export function markAlertDismissed(id) {
+  return stmts.markAlertDismissed.run(id);
+}
+
+export function markAlertWebhookSent(id) {
+  return stmts.markAlertWebhookSent.run(id);
+}
+
+export function getRecentAlertsByType(alertType, limit = 20) {
+  return stmts.getRecentAlertsByType.all(alertType, limit);
+}
+
+export function cleanupExpiredAlerts() {
+  return stmts.cleanupExpiredAlerts.run();
+}
 
 // -- Cleanup --
 
