@@ -2,6 +2,7 @@
 // Computes a 0-100 score and A/B/C/D grade for each bet.
 
 import type { ModelConfig } from "./config";
+import type { GoalieStatus } from "../types";
 
 export interface ConfidenceResult {
   score: number;
@@ -34,6 +35,8 @@ export function computeConfidence(
   market: "ml" | "pl" | "totals",
   cfg: ModelConfig,
   sharpBookScore?: number,
+  homeGoalieStatus?: GoalieStatus,
+  awayGoalieStatus?: GoalieStatus,
 ): ConfidenceResult {
   const minEdge = cfg.minEdge[market];
   const w = cfg.confidence;
@@ -56,8 +59,21 @@ export function computeConfidence(
   // 5. Price efficiency: penalize extreme probabilities (very heavy favorites/dogs)
   const priceScore = Math.max(0, 100 - Math.abs(modelProb - 0.5) * 200);
 
-  // 6. Goalie data quality
-  const goalieScore = hasGoalieData ? 100 : 35;
+  // 6. Goalie data quality — factor in confirmation status
+  let goalieScore = hasGoalieData ? 100 : 35;
+  if (cfg.goalieConfirmationEnabled) {
+    const hStatus = homeGoalieStatus || 'unknown';
+    const aStatus = awayGoalieStatus || 'unknown';
+
+    if (hStatus === 'confirmed' && aStatus === 'confirmed') {
+      goalieScore = Math.min(100, goalieScore + cfg.goalieConfirmedBoost);
+    } else if (hStatus === 'expected' || aStatus === 'expected') {
+      goalieScore = Math.max(0, goalieScore + cfg.goalieExpectedPenalty);
+    }
+    if (hStatus === 'unknown' || aStatus === 'unknown') {
+      goalieScore = Math.max(0, goalieScore + cfg.goalieUnknownPenalty);
+    }
+  }
 
   // 7. Sharp book signal
   const sbScore = (cfg.sharpBookEnabled && sharpBookScore !== undefined) ? sharpBookScore : 50;
@@ -86,6 +102,15 @@ export function computeConfidence(
   // Sharp book movement bonus: when sharp book score is high (>70), add bonus
   if (cfg.sharpBookEnabled && sharpBookScore !== undefined && sharpBookScore > 70) {
     score += cfg.sharpMovementBonus;
+  }
+
+  // Lineup adjustment: if lineup data is incomplete, apply penalty
+  if (cfg.lineupAdjustmentEnabled) {
+    const hStatus = homeGoalieStatus || 'unknown';
+    const aStatus = awayGoalieStatus || 'unknown';
+    if (hStatus === 'unknown' && aStatus === 'unknown') {
+      score += cfg.lineupIncompleteConfidencePenalty;
+    }
   }
 
   score = Math.max(0, Math.min(100, score));

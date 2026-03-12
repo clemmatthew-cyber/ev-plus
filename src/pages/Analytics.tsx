@@ -7,6 +7,7 @@ import type {
   MarketBreakdown,
   DailyMetric,
   SportsbookMetric,
+  GoalieConfirmation,
 } from "../lib/types";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -59,6 +60,7 @@ export default function Analytics() {
   const [confidenceData, setConfidenceData] = useState<ConfidenceBreakdown[]>([]);
   const [dailyData, setDailyData] = useState<DailyMetric[]>([]);
   const [sbMetrics, setSbMetrics] = useState<SportsbookMetric[]>([]);
+  const [goalieConfs, setGoalieConfs] = useState<(GoalieConfirmation & { gameDate: string })[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,6 +133,12 @@ export default function Analytics() {
           outlierFreq: m.outlier_freq as number,
         }))
       );
+
+      // Fetch goalie confirmations (non-blocking)
+      fetch(`${API_BASE}/api/goalie-confirmations`)
+        .then(r => r.json())
+        .then(data => { if (!cancelled) setGoalieConfs(data || []); })
+        .catch(() => {});
 
       setLoading(false);
     }
@@ -295,6 +303,30 @@ export default function Analytics() {
                 fmtPct(m.firstMoverFreq),
                 m.avgClv !== null ? <span className={plColor(m.avgClv)}>{fmt(m.avgClv, 1)}</span> : "—",
                 fmtPct(m.outlierFreq),
+              ];
+            })}
+          />
+        </Section>
+      )}
+
+      {/* 9. Goalie Status */}
+      {goalieConfs.length > 0 && (
+        <Section title="Goalie Status">
+          <Table
+            cols={["Team", "Goalie", "Status", "Source"]}
+            rows={goalieConfs.map(g => {
+              const badge = g.status === "confirmed"
+                ? "bg-emerald-500/20 text-emerald-400"
+                : g.status === "expected"
+                ? "bg-yellow-500/20 text-yellow-400"
+                : "bg-white/10 text-[#737373]";
+              return [
+                g.team,
+                g.goalieName,
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${badge}`}>
+                  {g.status.toUpperCase()}
+                </span>,
+                g.source || "—",
               ];
             })}
           />

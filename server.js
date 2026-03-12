@@ -5,6 +5,7 @@
 import express from "express";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import * as cheerio from "cheerio";
 import * as db from "./db.js";
 import * as evaluation from "./evaluation.js";
 import * as sportsbook from "./sportsbook-intelligence.js";
@@ -789,6 +790,224 @@ app.post("/api/sportsbook/analyze", (_req, res) => {
     console.error("[sportsbook/analyze] Error:", err.message);
     res.status(500).json({ error: "Sportsbook analysis failed", detail: err.message });
   }
+});
+
+// ─── Goalie Confirmation (DailyFaceoff) ───
+
+const GOALIE_CACHE_TTL = 15 * 60_000; // 15 minutes
+const goalieConfCache = { data: null, ts: 0, date: null };
+
+// Team name normalization for DailyFaceoff → 3-letter abbreviation
+const DF_TEAM_MAP = {
+  "Anaheim Ducks": "ANA", "Ducks": "ANA",
+  "Boston Bruins": "BOS", "Bruins": "BOS",
+  "Buffalo Sabres": "BUF", "Sabres": "BUF",
+  "Calgary Flames": "CGY", "Flames": "CGY",
+  "Carolina Hurricanes": "CAR", "Hurricanes": "CAR",
+  "Chicago Blackhawks": "CHI", "Blackhawks": "CHI",
+  "Colorado Avalanche": "COL", "Avalanche": "COL",
+  "Columbus Blue Jackets": "CBJ", "Blue Jackets": "CBJ",
+  "Dallas Stars": "DAL", "Stars": "DAL",
+  "Detroit Red Wings": "DET", "Red Wings": "DET",
+  "Edmonton Oilers": "EDM", "Oilers": "EDM",
+  "Florida Panthers": "FLA", "Panthers": "FLA",
+  "Los Angeles Kings": "LAK", "Kings": "LAK",
+  "Minnesota Wild": "MIN", "Wild": "MIN",
+  "Montreal Canadiens": "MTL", "Montréal Canadiens": "MTL", "Canadiens": "MTL",
+  "Nashville Predators": "NSH", "Predators": "NSH",
+  "New Jersey Devils": "NJD", "Devils": "NJD",
+  "New York Islanders": "NYI", "Islanders": "NYI",
+  "New York Rangers": "NYR", "Rangers": "NYR",
+  "Ottawa Senators": "OTT", "Senators": "OTT",
+  "Philadelphia Flyers": "PHI", "Flyers": "PHI",
+  "Pittsburgh Penguins": "PIT", "Penguins": "PIT",
+  "San Jose Sharks": "SJS", "Sharks": "SJS",
+  "Seattle Kraken": "SEA", "Kraken": "SEA",
+  "St. Louis Blues": "STL", "St Louis Blues": "STL", "Blues": "STL",
+  "Tampa Bay Lightning": "TBL", "Lightning": "TBL",
+  "Toronto Maple Leafs": "TOR", "Maple Leafs": "TOR",
+  "Utah Hockey Club": "UTA", "Utah Mammoth": "UTA",
+  "Vancouver Canucks": "VAN", "Canucks": "VAN",
+  "Vegas Golden Knights": "VGK", "Golden Knights": "VGK",
+  "Washington Capitals": "WSH", "Capitals": "WSH",
+  "Winnipeg Jets": "WPG", "Jets": "WPG",
+};
+
+function normalizeTeamName(name) {
+  if (!name) return null;
+  const trimmed = name.trim();
+  return DF_TEAM_MAP[trimmed] || null;
+}
+
+function parseGoalieStatus(text) {
+  if (!text) return "unknown";
+  const lower = text.toLowerCase().trim();
+  if (lower.includes("confirmed") || lower.includes("starter")) return "confirmed";
+  if (lower.includes("expected") || lower.includes("likely") || lower.includes("probable")) return "expected";
+  return "unknown";
+}
+
+async function fetchDailyFaceoffGoalies(dateStr) {
+  const url = dateStr
+    ? `https://www.dailyfaceoff.com/starting-goalies/${dateStr}`
+    : "https://www.dailyfaceoff.com/starting-goalies";
+
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; EVPlus/1.0)",
+        "Accept": "text/html",
+      },
+    });
+    if (!resp.ok) {
+      console.warn(`[goalie-conf] DailyFaceoff returned ${resp.status}`);
+      return [];
+    }
+
+    const html = await resp.text();
+    const $ = cheerio.load(html);
+    const confirmations = [];
+
+    // DailyFaceoff game cards — try multiple selectors for resilience
+    const gameCards = $(".starting-goalies-card, .goalies-card, [class*='goalie']").toArray();
+
+    if (gameCards.length === 0) {
+      // Fallback: look for any container with two team names and goalie info
+      $("table tr, .matchup, .game-card, .game").each((_, el) => {
+        const text = $(el).text();
+        // Try to extract team-goalie pairs from text content
+        for (const [teamName, abbrev] of Object.entries(DF_TEAM_MAP)) {
+          if (text.includes(teamName)) {
+            // Found a team reference — try to find goalie name near it
+            const links = $(el).find("a, .goalie-name, .player-name");
+            links.each((__, link) => {
+              const goalieName = $(link).text().trim();
+              if (goalieName && goalieName.includes(" ") && goalieName.length > 3 && goalieName.length < 40) {
+                const statusText = $(el).text();
+                confirmations.push({
+                  team: abbrev,
+                  goalieName,
+                  status: parseGoalieStatus(statusText),
+                  source: "dailyfaceoff",
+                });
+              }
+            });
+          }
+        }
+      });
+    } else {
+      for (const card of gameCards) {
+        const $card = $(card);
+        // Look for team names and goalie names within each card
+        const teams = [];
+        $card.find(".team-name, .team, [class*='team']").each((_, el) => {
+          const teamText = $(el).text().trim();
+          const abbrev = normalizeTeamName(teamText);
+          if (abbrev) teams.push(abbrev);
+        });
+
+        const goalieEls = $card.find(".goalie-name, .player-name, [class*='goalie'] a, [class*='player'] a").toArray();
+        const statusEls = $card.find(".status, .confirmed, .expected, [class*='status']").toArray();
+
+        for (let i = 0; i < Math.min(teams.length, goalieEls.length); i++) {
+          const goalieName = $(goalieEls[i]).text().trim();
+          const statusText = statusEls[i] ? $(statusEls[i]).text() : $card.text();
+          if (goalieName && goalieName.length > 2) {
+            confirmations.push({
+              team: teams[i],
+              goalieName,
+              status: parseGoalieStatus(statusText),
+              source: "dailyfaceoff",
+            });
+          }
+        }
+      }
+    }
+
+    return confirmations;
+  } catch (err) {
+    console.warn("[goalie-conf] DailyFaceoff fetch failed:", err.message);
+    return [];
+  }
+}
+
+async function getGoalieConfirmations(dateStr) {
+  const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+
+  // Check cache
+  if (goalieConfCache.data && goalieConfCache.date === targetDate &&
+      Date.now() - goalieConfCache.ts < GOALIE_CACHE_TTL) {
+    return { date: targetDate, confirmations: goalieConfCache.data, cached: true };
+  }
+
+  const confirmations = await fetchDailyFaceoffGoalies(dateStr);
+
+  // Save to SQLite
+  for (const c of confirmations) {
+    try {
+      db.upsertGoalieConfirmation({
+        game_date: targetDate,
+        team: c.team,
+        goalie_name: c.goalieName,
+        status: c.status,
+        source: c.source,
+      });
+    } catch (err) {
+      console.warn("[goalie-conf] DB upsert error:", err.message);
+    }
+  }
+
+  // Update cache
+  if (!dateStr || dateStr === new Date().toISOString().slice(0, 10)) {
+    goalieConfCache.data = confirmations;
+    goalieConfCache.ts = Date.now();
+    goalieConfCache.date = targetDate;
+  }
+
+  return { date: targetDate, confirmations };
+}
+
+// Route: GET /api/goalie-confirmations
+app.get("/api/goalie-confirmations", async (_req, res) => {
+  try {
+    const result = await getGoalieConfirmations();
+    res.json(result);
+  } catch (err) {
+    console.error("[goalie-conf] route error:", err.message);
+    res.json({ date: new Date().toISOString().slice(0, 10), confirmations: [], error: "source_unavailable" });
+  }
+});
+
+// Route: GET /api/goalie-confirmations/:date
+app.get("/api/goalie-confirmations/:date", async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "Invalid date format, use YYYY-MM-DD" });
+  }
+  try {
+    const result = await getGoalieConfirmations(date);
+    res.json(result);
+  } catch (err) {
+    console.error("[goalie-conf] route error:", err.message);
+    res.json({ date, confirmations: [], error: "source_unavailable" });
+  }
+});
+
+// Route: GET /api/lineup-adjustments
+app.get("/api/lineup-adjustments", (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = db.getLineupAdjustmentsByDate(today);
+  res.json({ date: today, adjustments: rows });
+});
+
+// Route: GET /api/lineup-adjustments/:date
+app.get("/api/lineup-adjustments/:date", (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "Invalid date format, use YYYY-MM-DD" });
+  }
+  const rows = db.getLineupAdjustmentsByDate(date);
+  res.json({ date, adjustments: rows });
 });
 
 // ─── Static files (React dist) ───

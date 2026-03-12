@@ -108,6 +108,17 @@ export interface ModelConfig {
   maxRestBonus: number;          // cap on rest bonus (default 1.03)
   travelPenaltyPerKm: number;   // per-km travel penalty (default 0, disabled)
   timezonePenaltyPerHour: number; // per-hour TZ penalty (default 0, disabled)
+
+  // ─── Goalie Confirmation ───
+  goalieConfirmationEnabled: boolean;
+  goalieConfirmedBoost: number;      // extra confidence points when goalie is confirmed
+  goalieExpectedPenalty: number;     // confidence penalty when goalie is only expected
+  goalieUnknownPenalty: number;      // confidence penalty when goalie status unknown
+  goalieConfirmedMultiplier: number; // lambda multiplier boost for confirmed vs expected
+
+  // ─── Lineup Adjustment ───
+  lineupAdjustmentEnabled: boolean;
+  lineupIncompleteConfidencePenalty: number;  // confidence penalty when lineup data incomplete
 }
 
 export const DEFAULT_CONFIG: ModelConfig = {
@@ -194,4 +205,15 @@ export const DEFAULT_CONFIG: ModelConfig = {
   maxRestBonus: 1.03,
   travelPenaltyPerKm: 0,
   timezonePenaltyPerHour: 0,
+
+  // Goalie Confirmation
+  goalieConfirmationEnabled: true,
+  goalieConfirmedBoost: 8,
+  goalieExpectedPenalty: -3,
+  goalieUnknownPenalty: -10,
+  goalieConfirmedMultiplier: 1.0,
+
+  // Lineup Adjustment
+  lineupAdjustmentEnabled: true,
+  lineupIncompleteConfidencePenalty: -5,
 };

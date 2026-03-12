@@ -222,6 +222,33 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_consensus_game ON market_consensus(game_id);
   CREATE INDEX IF NOT EXISTS idx_consensus_snapshot ON market_consensus(snapshot_at);
+
+  CREATE TABLE IF NOT EXISTS goalie_confirmations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date TEXT NOT NULL,
+    team TEXT NOT NULL,
+    goalie_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    source TEXT NOT NULL DEFAULT 'dailyfaceoff',
+    snapshot_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(game_date, team, snapshot_at)
+  );
+  CREATE INDEX IF NOT EXISTS idx_goalie_conf_date ON goalie_confirmations(game_date);
+  CREATE INDEX IF NOT EXISTS idx_goalie_conf_team ON goalie_confirmations(team);
+
+  CREATE TABLE IF NOT EXISTS lineup_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date TEXT NOT NULL,
+    team TEXT NOT NULL,
+    adjustment_type TEXT NOT NULL,
+    adjustment_detail TEXT,
+    impact_factor REAL NOT NULL DEFAULT 1.0,
+    confidence_penalty REAL NOT NULL DEFAULT 0,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(game_date, team, adjustment_type, applied_at)
+  );
+  CREATE INDEX IF NOT EXISTS idx_lineup_adj_date ON lineup_adjustments(game_date);
+  CREATE INDEX IF NOT EXISTS idx_lineup_adj_team ON lineup_adjustments(team);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -464,6 +491,43 @@ const stmts = {
   getAllOddsHistory: db.prepare("SELECT * FROM odds_history ORDER BY snapshot_at ASC"),
   getDistinctOddsGameIds: db.prepare("SELECT DISTINCT game_id FROM odds_history"),
 
+  // Goalie confirmations
+  upsertGoalieConfirmation: db.prepare(`
+    INSERT INTO goalie_confirmations (game_date, team, goalie_name, status, source, snapshot_at)
+    VALUES (@game_date, @team, @goalie_name, @status, @source, datetime('now'))
+    ON CONFLICT(game_date, team, snapshot_at) DO UPDATE SET
+      goalie_name = excluded.goalie_name,
+      status = excluded.status,
+      source = excluded.source
+  `),
+  getGoalieConfirmation: db.prepare(
+    "SELECT * FROM goalie_confirmations WHERE game_date = ? AND team = ? ORDER BY snapshot_at DESC LIMIT 1"
+  ),
+  getGoalieConfirmationsByDate: db.prepare(
+    "SELECT * FROM goalie_confirmations WHERE game_date = ? ORDER BY snapshot_at DESC"
+  ),
+  getLatestGoalieConfirmations: db.prepare(`
+    SELECT gc.* FROM goalie_confirmations gc
+    INNER JOIN (
+      SELECT game_date, team, MAX(snapshot_at) as max_snap
+      FROM goalie_confirmations
+      WHERE game_date = ?
+      GROUP BY game_date, team
+    ) latest ON gc.game_date = latest.game_date AND gc.team = latest.team AND gc.snapshot_at = latest.max_snap
+  `),
+
+  // Lineup adjustments
+  insertLineupAdjustment: db.prepare(`
+    INSERT INTO lineup_adjustments (game_date, team, adjustment_type, adjustment_detail, impact_factor, confidence_penalty)
+    VALUES (@game_date, @team, @adjustment_type, @adjustment_detail, @impact_factor, @confidence_penalty)
+  `),
+  getLineupAdjustments: db.prepare(
+    "SELECT * FROM lineup_adjustments WHERE game_date = ? AND team = ? ORDER BY applied_at DESC"
+  ),
+  getLineupAdjustmentsByDate: db.prepare(
+    "SELECT * FROM lineup_adjustments WHERE game_date = ? ORDER BY applied_at DESC"
+  ),
+
   // Model results
   insertModelResult: db.prepare(`
     INSERT INTO model_results (
@@ -677,6 +741,19 @@ export function insertMarketConsensus(row) {
 export function getMarketConsensusByGame(gameId) {
   return stmts.getMarketConsensusByGame.all(gameId);
 }
+
+// -- Goalie Confirmations --
+
+export function upsertGoalieConfirmation(row) { return stmts.upsertGoalieConfirmation.run(row); }
+export function getGoalieConfirmation(gameDate, team) { return stmts.getGoalieConfirmation.get(gameDate, team) || null; }
+export function getGoalieConfirmationsByDate(gameDate) { return stmts.getGoalieConfirmationsByDate.all(gameDate); }
+export function getLatestGoalieConfirmations(gameDate) { return stmts.getLatestGoalieConfirmations.all(gameDate); }
+
+// -- Lineup Adjustments --
+
+export function insertLineupAdjustment(row) { return stmts.insertLineupAdjustment.run(row); }
+export function getLineupAdjustments(gameDate, team) { return stmts.getLineupAdjustments.all(gameDate, team); }
+export function getLineupAdjustmentsByDate(gameDate) { return stmts.getLineupAdjustmentsByDate.all(gameDate); }
 
 // -- Bulk Odds Helpers --
 

@@ -172,6 +172,27 @@ export interface DailyMetric {
 
 // ─── Sportsbook Intelligence Types ───
 
+// ─── Goalie Confirmation Types ───
+
+export type GoalieStatus = 'confirmed' | 'expected' | 'unknown';
+
+export interface GoalieConfirmation {
+  team: string;
+  goalieName: string;
+  status: GoalieStatus;
+  source: string;
+}
+
+export interface LineupAdjustment {
+  team: string;
+  adjustmentType: string;
+  adjustmentDetail: string | null;
+  impactFactor: number;
+  confidencePenalty: number;
+}
+
+// ─── Sportsbook Intelligence Types ───
+
 export interface SportsbookMetric {
   book: string;
   sharpnessRank: number;

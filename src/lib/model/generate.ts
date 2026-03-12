@@ -2,7 +2,7 @@
 // Takes raw data + config, returns scored EvBet[] array.
 // No side effects, no fetching — pure transformation.
 
-import type { EvBet } from "../types";
+import type { EvBet, GoalieConfirmation, GoalieStatus } from "../types";
 import type { GameOdds, BestLine } from "../odds";
 import { findBestLine, bookName, teamAbbrev } from "../odds";
 import type { TeamStats, GoalieStats, LeagueAverages } from "../stats";
@@ -46,6 +46,24 @@ export interface GenerateInput {
   config: ModelConfig;
   recentGames?: ScheduleEntry[];
   sharpBookScores?: Map<string, number>;
+  goalieConfirmations?: Map<string, GoalieConfirmation>;
+}
+
+/**
+ * Find a goalie by name in the goalie stats map.
+ * Tries exact match first, then last-name match.
+ */
+function findGoalieByName(
+  goalies: Map<string, GoalieStats[]>,
+  team: string,
+  name: string,
+): GoalieStats | null {
+  const list = goalies.get(team);
+  if (!list) return null;
+  const normalized = name.toLowerCase().trim();
+  return list.find(g => g.name.toLowerCase().trim() === normalized)
+    || list.find(g => normalized.includes(g.name.toLowerCase().split(' ').pop() || ''))
+    || null;
 }
 
 /**
@@ -61,7 +79,7 @@ export interface GenerateInput {
  * 7. Return sorted by edge descending
  */
 export function generateEvBets(input: GenerateInput): EvBet[] {
-  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames, sharpBookScores } = input;
+  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames, sharpBookScores, goalieConfirmations } = input;
   const hasStats = stats.size > 0;
   const hasGoalies = goalies.size > 0;
   const max = cfg.poissonMaxGoals;
@@ -78,8 +96,33 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     const aS = stats.get(aA);
     const nBooks = game.bookmakers.length;
 
-    const hGoalie = hasGoalies ? getStarter(goalies, hA) : null;
-    const aGoalie = hasGoalies ? getStarter(goalies, aA) : null;
+    let hGoalie = hasGoalies ? getStarter(goalies, hA) : null;
+    let aGoalie = hasGoalies ? getStarter(goalies, aA) : null;
+
+    // ── Goalie confirmation override ──
+    let hGoalieStatus: GoalieStatus = 'unknown';
+    let aGoalieStatus: GoalieStatus = 'unknown';
+
+    if (cfg.goalieConfirmationEnabled && goalieConfirmations) {
+      const hConf = goalieConfirmations.get(hA);
+      const aConf = goalieConfirmations.get(aA);
+
+      if (hConf) {
+        hGoalieStatus = hConf.status;
+        if (hConf.status === 'confirmed' && hasGoalies) {
+          const confirmed = findGoalieByName(goalies, hA, hConf.goalieName);
+          if (confirmed) hGoalie = confirmed;
+        }
+      }
+
+      if (aConf) {
+        aGoalieStatus = aConf.status;
+        if (aConf.status === 'confirmed' && hasGoalies) {
+          const confirmed = findGoalieByName(goalies, aA, aConf.goalieName);
+          if (confirmed) aGoalie = confirmed;
+        }
+      }
+    }
 
     // ── Estimate lambdas ──
     let { homeLam, awayLam, hasGoalieData } = hS && aS
@@ -141,6 +184,7 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       const conf = computeConfidence(
         edge, mp, bl.fairProb, nBooks, hGP, aGP,
         hasGoalieData, market, cfg, sbScore,
+        hGoalieStatus, aGoalieStatus,
       );
 
       const { kellyFraction, stake } = computeStake(mp, bl.decimalOdds, conf.grade, cfg);
