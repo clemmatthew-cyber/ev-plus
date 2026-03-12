@@ -7,6 +7,7 @@ import type { EvBet } from "./types";
 import { fetchNhlOdds } from "./odds";
 import { fetchTeamStats, fetchGoalieStats, leagueAverages, leagueAvg } from "./stats";
 import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } from "./model";
+import { fetchRecentSchedule } from "./schedule";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -103,9 +104,10 @@ async function runNhlPipeline(
   games: Awaited<ReturnType<typeof fetchNhlOdds>>,
   config: ModelConfig,
 ): Promise<EvBet[]> {
-  const [stats, goalies] = await Promise.all([
+  const [stats, goalies, recentGames] = await Promise.all([
     fetchTeamStats(),
     fetchGoalieStats(),
+    fetchRecentSchedule(),
   ]);
 
   const hasStats = stats.size > 0;
@@ -126,5 +128,6 @@ async function runNhlPipeline(
     lg,
     lgGoalsPerGame,
     config,
+    recentGames,
   });
 }
