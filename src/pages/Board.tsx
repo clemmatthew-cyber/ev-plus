@@ -109,7 +109,7 @@ export default function Board() {
     return new Date(a.gameTime).getTime() - new Date(b.gameTime).getTime();
   });
 
-  const plLabel = sport === "nhl" ? "PL" : "Sprd";
+  const plLabel = sport === "nhl" ? "PL" : "Sprd";  // NHL uses "PL" (puck line), all others use "Sprd"
   const filters: { key: MarketFilter; label: string }[] = [
     { key: "all", label: "All" }, { key: "ml", label: "ML" }, { key: "pl", label: plLabel }, { key: "totals", label: "O/U" },
   ];

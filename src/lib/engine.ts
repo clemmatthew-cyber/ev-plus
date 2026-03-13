@@ -7,6 +7,7 @@ import type { EvBet } from "./types";
 import { fetchNhlOdds } from "./odds";
 import { fetchTeamStats, fetchGoalieStats, leagueAverages, leagueAvg } from "./stats";
 import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } from "./model";
+import { NCAAB_CONFIG } from "./model/ncaab-config";
 import { fetchRecentSchedule } from "./schedule";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
@@ -86,6 +87,9 @@ export async function runPipeline(
   let bets: EvBet[];
   if (sport === "nhl") {
     bets = await runNhlPipeline(games, config);
+  } else if (sport === "ncaab") {
+    // NCAAB → devig model with college-specific thresholds
+    bets = generateNbaEvBets(games, { ...config, ...NCAAB_CONFIG });
   } else {
     // NBA, MMA, and any future sport → devig model
     bets = generateNbaEvBets(games, config);

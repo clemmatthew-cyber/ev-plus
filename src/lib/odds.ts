@@ -26,6 +26,7 @@ export const devigPower = shinDevig;
 const SPORT_KEYS: Record<string, string> = {
   nhl: "icehockey_nhl",
   nba: "basketball_nba",
+  ncaab: "basketball_ncaab",
   mma: "mma_mixed_martial_arts",
 };
 

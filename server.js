@@ -51,6 +51,7 @@ function isFresh(entry) {
 const SPORT_KEYS = {
   nhl: "icehockey_nhl",
   nba: "basketball_nba",
+  ncaab: "basketball_ncaab",
   mma: "mma_mixed_martial_arts",
 };
 

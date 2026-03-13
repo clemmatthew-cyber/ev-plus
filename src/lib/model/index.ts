@@ -13,3 +13,4 @@ export { computeConfidence, type ConfidenceResult } from "./confidence";
 export { generateEvBets, type GenerateInput } from "./generate";
 export { generateNbaEvBets } from "./nba";
 export { NBA_CONFIG } from "./nba-config";
+export { NCAAB_CONFIG } from "./ncaab-config";
