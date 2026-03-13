@@ -127,11 +127,30 @@ export default function BetRow({ bet, movement, onToggle }: Props) {
           <div className="w-8 flex-shrink-0">
             <ConfidenceBadge grade={bet.confidenceGrade} />
           </div>
+          {bet.tournamentType && bet.tournamentType !== 'none' && (
+            <span className="hidden sm:inline-block flex-shrink-0 text-[9px] font-semibold px-1 py-0.5 rounded bg-purple-500/20 text-purple-300">
+              {bet.tournamentType === 'conference' ? 'CONF' : 'NCAA'}
+            </span>
+          )}
           <div className="hidden sm:block w-14 flex-shrink-0 text-xs text-[#737373] font-mono">
             {fmtTime(bet.gameTime)}
           </div>
           <div className="w-20 sm:w-24 flex-shrink-0 text-xs font-medium truncate text-[#ededed]">
-            {bet.awayTeam} @ {bet.homeTeam}
+            {bet.awaySeed != null && (
+              <span className={bet.seedSource === 'actual' ? 'text-[#ededed]' : 'text-[#737373]'}>
+                {bet.seedSource === 'estimated' ? '~' : ''}{bet.awaySeed}{' '}
+              </span>
+            )}
+            {bet.awayTeam}
+            {bet.shortTurnaround?.away && <span className="ml-0.5 text-[10px] text-amber-400" title="Back-to-back">B2B</span>}
+            {' @ '}
+            {bet.homeSeed != null && (
+              <span className={bet.seedSource === 'actual' ? 'text-[#ededed]' : 'text-[#737373]'}>
+                {bet.seedSource === 'estimated' ? '~' : ''}{bet.homeSeed}{' '}
+              </span>
+            )}
+            {bet.homeTeam}
+            {bet.shortTurnaround?.home && <span className="ml-0.5 text-[10px] text-amber-400" title="Back-to-back">B2B</span>}
           </div>
           <div className="flex-1 min-w-0 text-xs font-medium text-[#ededed]/90 truncate">
             {bet.outcome}

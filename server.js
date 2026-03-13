@@ -1162,7 +1162,7 @@ app.post("/api/tournament-snapshot", (req, res) => {
       snapshot.homeSeed, snapshot.awaySeed, snapshot.styleMismatchScore,
       snapshot.tempoMismatchPct, snapshot.modelProb, snapshot.devigMarketProb,
       snapshot.modelVsMarketDiff, snapshot.publicBiasTeam,
-      snapshot.shortTurnaround ? 1 : 0, snapshot.confidenceMultiplier
+      (snapshot.shortTurnaround?.home || snapshot.shortTurnaround?.away) ? 1 : 0, snapshot.confidenceMultiplier
     );
 
     res.json({ ok: true });

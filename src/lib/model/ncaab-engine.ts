@@ -77,7 +77,7 @@ export function generateNcaabEvBets(
     if (hasModel) {
       projection = computeNcaabProjection(
         homeTorvikStats, awayTorvikStats,
-        tournCtx.isTournament, // neutral site for all tournament games
+        tournCtx.isNeutralSite, // neutral site for all tournament games (conf + NCAA)
       );
 
       // Apply tournament total/spread adjustments and recompute win probs
@@ -255,6 +255,12 @@ export function generateNcaabEvBets(
           suggestedStake: stake,
           placed: false,
           surfacedAt: new Date().toISOString(),
+          // NCAAB tournament context
+          tournamentType: tournCtx.tournamentType,
+          homeSeed: tournCtx.homeSeed,
+          awaySeed: tournCtx.awaySeed,
+          seedSource: tournCtx.seedSource,
+          shortTurnaround: tournCtx.shortTurnaround,
         });
       }
     }

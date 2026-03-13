@@ -20,6 +20,12 @@ export interface EvBet {
   suggestedStake: number;
   placed: boolean;
   surfacedAt: string;
+  // NCAAB tournament context (optional — only present for NCAAB games)
+  tournamentType?: 'conference' | 'ncaa' | 'none';
+  homeSeed?: number | null;
+  awaySeed?: number | null;
+  seedSource?: 'actual' | 'estimated';
+  shortTurnaround?: { home: boolean; away: boolean };
 }
 
 // ─── Tracked bet: full snapshot saved when user taps checkmark ───

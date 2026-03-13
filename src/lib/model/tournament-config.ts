@@ -7,6 +7,10 @@ export const TOURNAMENT_CONFIG = {
   tournamentStartMonth: 2,    // March
   tournamentStartDay: 14,     // March 14+
 
+  // Conference tournament date range (before NCAA tournament)
+  confTournamentStartDay: 4,  // March 4
+  confTournamentEndDay: 15,   // March 15 (Selection Sunday)
+
   // Confidence multipliers
   baseConfidenceMultiplier: 0.85,      // reduce confidence by 15% for all tournament games
   crossConferencePenalty: 0.05,        // additional 5% reduction for cross-conference
@@ -24,7 +28,26 @@ export const TOURNAMENT_CONFIG = {
 
   // Short turnaround
   shortTurnaroundSpreadPenalty: 1.0,  // points added to spread for fatigued team
+  shortTurnaroundPenalty: 1.5,        // points deducted for back-to-back (<24h)
 
   // Sigma adjustment for tournament uncertainty
   tournamentSigmaMultiplier: 1.08,    // 8% wider scoring margin distribution
+};
+
+// Known conference tournament neutral-site venues
+export const CONFERENCE_TOURNAMENT_VENUES: string[] = [
+  'T-Mobile Center',       // Big 12
+  'United Center',         // Big Ten
+  'Greensboro',            // ACC
+  'Bridgestone Arena',     // SEC
+  'Madison Square Garden', // Big East
+  'T-Mobile Arena',        // Pac-12/WCC
+  'Orleans Arena',         // WAC/others
+  'Boardwalk Hall',        // misc
+];
+
+// Actual NCAA tournament seeds — populated after Selection Sunday.
+// Keys = Torvik team names. When empty, falls back to Barthag estimation.
+export const ACTUAL_SEEDS: Record<string, number> = {
+  // e.g. 'Houston': 1, 'Auburn': 1, 'Duke': 1, 'Florida': 1, ...
 };

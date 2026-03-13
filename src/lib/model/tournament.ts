@@ -4,30 +4,93 @@
 
 import type { TorvikStats } from "../stats/torvik";
 import type { GameOdds } from "../odds";
-import { TOURNAMENT_CONFIG } from "./tournament-config";
+import { TOURNAMENT_CONFIG, CONFERENCE_TOURNAMENT_VENUES, ACTUAL_SEEDS } from "./tournament-config";
 
 // ── Tournament Detection ──
 
 export interface TournamentContext {
   isTournament: boolean;
+  tournamentType: 'conference' | 'ncaa' | 'none';
   tournamentRound: string | null;   // "R64", "R32", "S16", "E8", "F4", "NCG", "play_in", or null
   isNeutralSite: boolean;
   homeSeed: number | null;
   awaySeed: number | null;
+  seedSource: 'actual' | 'estimated';
   homeConference: string | null;
   awayConference: string | null;
   isCrossConference: boolean;
-  shortTurnaround: boolean;         // game within 1-2 days of prior game
+  shortTurnaround: {
+    home: boolean;
+    away: boolean;
+  };
   homePriorTournamentGame: boolean;
   awayPriorTournamentGame: boolean;
   publicBiasTeam: string | null;    // which team (if any) is the "public" side
 }
 
+// ── In-memory per-team last-game-time cache for short turnaround detection ──
+const teamLastGameTime = new Map<string, Date>();
+
+/** Record a game time for both teams (call as games are processed). */
+export function recordTeamGameTime(homeTeam: string, awayTeam: string, gameTime: Date): void {
+  const existing = teamLastGameTime.get(homeTeam);
+  if (!existing || gameTime > existing) teamLastGameTime.set(homeTeam, gameTime);
+  const existingAway = teamLastGameTime.get(awayTeam);
+  if (!existingAway || gameTime > existingAway) teamLastGameTime.set(awayTeam, gameTime);
+}
+
+/** Check if a team played within the last 24 hours. */
+function isShortTurnaround(teamName: string, currentGameTime: Date): boolean {
+  const lastGame = teamLastGameTime.get(teamName);
+  if (!lastGame) return false;
+  const hoursBetween = (currentGameTime.getTime() - lastGame.getTime()) / (1000 * 60 * 60);
+  return hoursBetween > 0 && hoursBetween < 24;
+}
+
+/** Check if a game is during the conference tournament window at a neutral site. */
+function isConferenceTournament(gameDate: Date, venue?: string): boolean {
+  const month = gameDate.getMonth(); // 0-indexed
+  const day = gameDate.getDate();
+
+  // Must be March 4-15
+  if (month !== 2 || day < TOURNAMENT_CONFIG.confTournamentStartDay || day > TOURNAMENT_CONFIG.confTournamentEndDay) {
+    return false;
+  }
+
+  // If venue matches known neutral sites, definitely conf tournament
+  if (venue) {
+    const venueLower = venue.toLowerCase();
+    if (CONFERENCE_TOURNAMENT_VENUES.some(v => venueLower.includes(v.toLowerCase()))) {
+      return true;
+    }
+  }
+
+  // During March 4-15, conservatively default to conference tournament
+  return true;
+}
+
+/** Look up seed: actual seeds take precedence, then Barthag estimation. */
+function getTeamSeed(
+  stats: TorvikStats,
+  allStats: Map<string, TorvikStats>,
+): { seed: number | null; source: 'actual' | 'estimated' } {
+  // Check actual seeds first (populated after Selection Sunday)
+  const actual = ACTUAL_SEEDS[stats.team];
+  if (actual != null) {
+    return { seed: actual, source: 'actual' };
+  }
+  // Fall back to Barthag estimation
+  const estimated = estimateSeed(stats, allStats);
+  return { seed: estimated, source: 'estimated' };
+}
+
 /**
- * Detect whether a game is part of March Madness / NCAA Tournament.
+ * Detect whether a game is part of March Madness / NCAA Tournament
+ * or a conference tournament.
  *
  * Detection strategy (since The Odds API doesn't flag tournament games):
- * - If date >= March 14 and sport is NCAAB → isTournament = true, isNeutralSite = true
+ * - If date >= March 14 and sport is NCAAB → NCAA tournament
+ * - If date is March 4-15 and game at known neutral site → conference tournament
  * - Round detection via date ranges (approximate)
  */
 export function detectTournamentContext(
@@ -41,38 +104,58 @@ export function detectTournamentContext(
   const month = gameDate.getMonth(); // 0-indexed
   const day = gameDate.getDate();
 
-  const isTournament =
+  const isNcaaTournament =
     (month === TOURNAMENT_CONFIG.tournamentStartMonth && day >= TOURNAMENT_CONFIG.tournamentStartDay) ||
     (month === 3); // April
+
+  const isConfTournament = !isNcaaTournament && isConferenceTournament(gameDate, (game as any).venue);
+
+  const isTournament = isNcaaTournament || isConfTournament;
 
   if (!isTournament) {
     return {
       isTournament: false,
+      tournamentType: 'none',
       tournamentRound: null,
       isNeutralSite: false,
       homeSeed: null,
       awaySeed: null,
+      seedSource: 'estimated',
       homeConference: null,
       awayConference: null,
       isCrossConference: false,
-      shortTurnaround: false,
+      shortTurnaround: { home: false, away: false },
       homePriorTournamentGame: false,
       awayPriorTournamentGame: false,
       publicBiasTeam: null,
     };
   }
 
-  const tournamentRound = estimateTournamentRound(gameDate);
-  const homeSeed = homeStats && allStats ? estimateSeed(homeStats, allStats) : null;
-  const awaySeed = awayStats && allStats ? estimateSeed(awayStats, allStats) : null;
+  const tournamentType: 'conference' | 'ncaa' = isNcaaTournament ? 'ncaa' : 'conference';
+  const tournamentRound = isNcaaTournament ? estimateTournamentRound(gameDate) : null;
 
-  // We don't have conference data from Torvik, so cross-conference detection
-  // is heuristic: in the NCAA tournament proper (R64+), almost all matchups
-  // are cross-conference. Conference tournaments (play_in / pre-March-18) are not.
-  const isCrossConference = tournamentRound !== null && tournamentRound !== "play_in";
+  // Seed lookup with actual/estimated tracking
+  const homeSeedInfo = homeStats && allStats ? getTeamSeed(homeStats, allStats) : null;
+  const awaySeedInfo = awayStats && allStats ? getTeamSeed(awayStats, allStats) : null;
+  const homeSeed = homeSeedInfo?.seed ?? null;
+  const awaySeed = awaySeedInfo?.seed ?? null;
+  // If either seed is actual, report 'actual'; otherwise 'estimated'
+  const seedSource: 'actual' | 'estimated' =
+    (homeSeedInfo?.source === 'actual' || awaySeedInfo?.source === 'actual') ? 'actual' : 'estimated';
 
-  // Short turnaround: check if game is within 1-2 days of a recent tournament game
-  const shortTurnaround = false; // Default — we don't track prior games per team here
+  // Cross-conference: in NCAA tournament proper (R64+), almost all are cross-conference.
+  // Conference tournaments are NOT cross-conference.
+  const isCrossConference = tournamentType === 'ncaa' && tournamentRound !== null && tournamentRound !== "play_in";
+
+  // Short turnaround detection
+  const homeShort = homeStats ? isShortTurnaround(homeStats.team, gameDate) : false;
+  const awayShort = awayStats ? isShortTurnaround(awayStats.team, gameDate) : false;
+
+  // Track this game for future turnaround detection
+  if (homeStats && awayStats) {
+    recordTeamGameTime(homeStats.team, awayStats.team, gameDate);
+  }
+
   const homePriorTournamentGame = false;
   const awayPriorTournamentGame = false;
 
@@ -88,14 +171,16 @@ export function detectTournamentContext(
 
   return {
     isTournament: true,
+    tournamentType,
     tournamentRound,
-    isNeutralSite: true,  // All NCAA tournament games are at neutral sites
+    isNeutralSite: true,  // Both NCAA and conference tournament games are at neutral sites
     homeSeed,
     awaySeed,
+    seedSource,
     homeConference: null,  // Not available from Torvik data
     awayConference: null,
     isCrossConference,
-    shortTurnaround,
+    shortTurnaround: { home: homeShort, away: awayShort },
     homePriorTournamentGame,
     awayPriorTournamentGame,
     publicBiasTeam,
@@ -263,9 +348,14 @@ export function computeTournamentAdjustments(
     confidenceMultiplier -= TOURNAMENT_CONFIG.crossConferencePenalty;
   }
 
-  // 4. Short turnaround spread penalty
-  if (ctx.shortTurnaround) {
-    spreadAdjustment += TOURNAMENT_CONFIG.shortTurnaroundSpreadPenalty;
+  // 4. Short turnaround spread penalty (per-team)
+  // If home team has short turnaround, penalize home (add to spread = away favored more)
+  if (ctx.shortTurnaround.home) {
+    spreadAdjustment += TOURNAMENT_CONFIG.shortTurnaroundPenalty;
+  }
+  // If away team has short turnaround, penalize away (subtract from spread = home favored more)
+  if (ctx.shortTurnaround.away) {
+    spreadAdjustment -= TOURNAMENT_CONFIG.shortTurnaroundPenalty;
   }
 
   // 5. Apply confidence floor
@@ -285,18 +375,20 @@ export function computeTournamentAdjustments(
 
 export interface TournamentSnapshot {
   postseason: boolean;
+  tournamentType: 'conference' | 'ncaa' | 'none';
   tournamentRound: string | null;
   neutralSite: boolean;
   homeCurtAdjUsed: number;
   homeSeed: number | null;
   awaySeed: number | null;
+  seedSource: 'actual' | 'estimated';
   styleMismatchScore: number;
   tempoMismatchPct: number;
   modelProb: number;
   devigMarketProb: number;
   modelVsMarketDiff: number;
   publicBiasTeam: string | null;
-  shortTurnaround: boolean;
+  shortTurnaround: { home: boolean; away: boolean };
   confidenceMultiplier: number;
 }
 
@@ -321,11 +413,13 @@ export function buildTournamentSnapshot(
 
   return {
     postseason: ctx.isTournament,
+    tournamentType: ctx.tournamentType,
     tournamentRound: ctx.tournamentRound,
     neutralSite: ctx.isNeutralSite,
     homeCurtAdjUsed: hcaUsed,
     homeSeed: ctx.homeSeed,
     awaySeed: ctx.awaySeed,
+    seedSource: ctx.seedSource,
     styleMismatchScore: adjustments.styleMismatchScore,
     tempoMismatchPct: Math.round(tempoMismatchPct * 10) / 10,
     modelProb,
