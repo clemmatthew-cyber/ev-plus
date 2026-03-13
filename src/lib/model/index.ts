@@ -16,3 +16,5 @@ export { NBA_CONFIG } from "./nba-config";
 export { NCAAB_CONFIG } from "./ncaab-config";
 export { generateNcaabEvBets } from "./ncaab-engine";
 export { computeNcaabProjection, getTeamWinProb, type NcaabProjection } from "./ncaab-model";
+export { detectTournamentContext, computeTournamentAdjustments, buildTournamentSnapshot, estimateSeed, detectPublicBias, type TournamentContext, type TournamentAdjustments, type TournamentSnapshot } from "./tournament";
+export { TOURNAMENT_CONFIG } from "./tournament-config";

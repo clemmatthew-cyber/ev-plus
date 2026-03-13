@@ -1140,6 +1140,104 @@ app.post("/api/recalibration/reset", (_req, res) => {
   }
 });
 
+// ─── Tournament Endpoints ───
+
+app.post("/api/tournament-snapshot", (req, res) => {
+  try {
+    const { gameId, snapshot } = req.body;
+    if (!gameId || !snapshot) return res.status(400).json({ error: "missing fields" });
+
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO tournament_games (
+        game_id, sport, postseason, tournament_round, neutral_site,
+        home_court_adj_used, home_seed, away_seed, style_mismatch_score,
+        tempo_mismatch_pct, model_prob, devig_market_prob, model_vs_market_diff,
+        public_bias_team, short_turnaround, confidence_multiplier
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      gameId, "ncaab", snapshot.postseason ? 1 : 0, snapshot.tournamentRound,
+      snapshot.neutralSite ? 1 : 0, snapshot.homeCurtAdjUsed,
+      snapshot.homeSeed, snapshot.awaySeed, snapshot.styleMismatchScore,
+      snapshot.tempoMismatchPct, snapshot.modelProb, snapshot.devigMarketProb,
+      snapshot.modelVsMarketDiff, snapshot.publicBiasTeam,
+      snapshot.shortTurnaround ? 1 : 0, snapshot.confidenceMultiplier
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save tournament snapshot", detail: err.message });
+  }
+});
+
+app.get("/api/tournament-performance", (req, res) => {
+  try {
+    const season = req.query.season || new Date().getFullYear();
+    const rows = db.prepare(
+      "SELECT * FROM tournament_performance WHERE season = ? ORDER BY segment"
+    ).all(season);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch tournament performance", detail: err.message });
+  }
+});
+
+app.post("/api/tournament-performance/compute", (req, res) => {
+  try {
+    const season = new Date().getFullYear();
+
+    const tournBets = db.prepare(`
+      SELECT b.*, tg.home_seed, tg.away_seed, tg.public_bias_team, tg.tournament_round
+      FROM bets b
+      JOIN tournament_games tg ON b.game_id = tg.game_id
+      WHERE b.result IN ('win', 'loss', 'push')
+    `).all();
+
+    if (tournBets.length === 0) return res.json({ ok: true, message: "no data" });
+
+    // Compute segments
+    const segments = ["all_tournament", "favorites", "underdogs", "overs", "unders", "high_seeds", "low_seeds"];
+    const upsert = db.prepare(`
+      INSERT INTO tournament_performance (sport, season, segment, total_bets, wins, losses, pushes, total_staked, total_profit, roi_pct, avg_edge, hit_rate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sport, season, segment) DO UPDATE SET
+        total_bets=excluded.total_bets, wins=excluded.wins, losses=excluded.losses,
+        pushes=excluded.pushes, total_staked=excluded.total_staked, total_profit=excluded.total_profit,
+        roi_pct=excluded.roi_pct, avg_edge=excluded.avg_edge, hit_rate=excluded.hit_rate,
+        computed_at=datetime('now')
+    `);
+
+    for (const seg of segments) {
+      const filtered = tournBets.filter(b => {
+        if (seg === "all_tournament") return true;
+        if (seg === "favorites") return b.market === "ml" && b.edge > 0;
+        if (seg === "underdogs") return b.market === "ml" && b.odds_at_pick > 0;
+        if (seg === "overs") return b.market === "totals" && b.outcome && b.outcome.startsWith("Over");
+        if (seg === "unders") return b.market === "totals" && b.outcome && b.outcome.startsWith("Under");
+        if (seg === "high_seeds") return (b.home_seed && b.home_seed <= 4) || (b.away_seed && b.away_seed <= 4);
+        if (seg === "low_seeds") return (b.home_seed && b.home_seed > 4) || (b.away_seed && b.away_seed > 4);
+        return false;
+      });
+
+      const wins = filtered.filter(b => b.result === "win").length;
+      const losses = filtered.filter(b => b.result === "loss").length;
+      const pushes = filtered.filter(b => b.result === "push").length;
+      const totalStaked = filtered.reduce((s, b) => s + (b.stake || 0), 0);
+      const totalProfit = filtered.reduce((s, b) => s + (b.profit_loss || 0), 0);
+      const roiPct = totalStaked > 0 ? (totalProfit / totalStaked) * 100 : 0;
+      const avgEdge = filtered.length > 0 ? filtered.reduce((s, b) => s + (b.edge || 0), 0) / filtered.length : 0;
+      const hitRate = (wins + losses) > 0 ? wins / (wins + losses) : 0;
+
+      upsert.run("ncaab", season, seg, filtered.length, wins, losses, pushes, totalStaked, totalProfit, roiPct, avgEdge, hitRate);
+    }
+
+    res.json({ ok: true, computed: tournBets.length });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to compute tournament performance", detail: err.message });
+  }
+});
+
 // ─── Static files (React dist) ───
 
 app.use(express.static(join(__dirname, "dist")));

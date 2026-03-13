@@ -23,6 +23,9 @@ import { NCAAB_CONFIG } from "./ncaab-config";
 import { computeNcaabProjection, normalCDF } from "./ncaab-model";
 import type { TorvikStats } from "../stats/torvik";
 import { findTeamStats } from "../stats/torvik";
+import { detectTournamentContext, computeTournamentAdjustments, buildTournamentSnapshot } from "./tournament";
+import type { TournamentContext, TournamentAdjustments } from "./tournament";
+import { TOURNAMENT_CONFIG } from "./tournament-config";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -51,9 +54,37 @@ export function generateNcaabEvBets(
     const awayTorvikStats = torvikStats ? findTeamStats(game.awayTeam, torvikStats) : null;
     const hasModel = homeTorvikStats != null && awayTorvikStats != null;
 
+    // ─── Tournament detection ───
+    const tournCtx = detectTournamentContext(
+      game, homeTorvikStats, awayTorvikStats, torvikStats ?? undefined,
+    );
+    const tournAdj = tournCtx.isTournament
+      ? computeTournamentAdjustments(tournCtx, homeTorvikStats, awayTorvikStats, torvikStats!)
+      : null;
+
     let projection: ReturnType<typeof computeNcaabProjection> | null = null;
     if (hasModel) {
-      projection = computeNcaabProjection(homeTorvikStats, awayTorvikStats);
+      projection = computeNcaabProjection(
+        homeTorvikStats, awayTorvikStats,
+        tournCtx.isTournament, // neutral site for all tournament games
+      );
+
+      // Apply tournament total/spread adjustments and recompute win probs
+      if (tournCtx.isTournament && tournAdj && projection) {
+        const adjustedSpread = projection.projectedSpread + tournAdj.spreadAdjustment;
+        const adjustedTotal = projection.projectedTotal + tournAdj.totalAdjustment;
+        const adjustedDiff = -adjustedSpread;
+        const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma *
+          TOURNAMENT_CONFIG.tournamentSigmaMultiplier;
+        const adjustedHomeWinProb = normalCDF(adjustedDiff / sigma);
+        projection = {
+          ...projection,
+          projectedSpread: adjustedSpread,
+          projectedTotal: adjustedTotal,
+          homeWinProb: adjustedHomeWinProb,
+          awayWinProb: 1 - adjustedHomeWinProb,
+        };
+      }
     }
 
     const homeGP = homeTorvikStats?.gamesPlayed ?? seasonGP;
@@ -126,6 +157,7 @@ export function generateNcaabEvBets(
         if (hasModel && projection) {
           modelProb = getModelProbForOutcome(
             mDef.mType, info.name, info.point, game, projection,
+            tournCtx.isTournament,
           );
         }
 
@@ -136,7 +168,7 @@ export function generateNcaabEvBets(
         if (modelEdge < minEdge && devigEdge < minEdge) continue;
 
         // Use the larger edge as the primary edge
-        const primaryEdge = Math.max(modelEdge, devigEdge);
+        let primaryEdge = Math.max(modelEdge, devigEdge);
         const primaryProb = modelEdge >= devigEdge ? modelProb : devigFairProb;
         const ev = primaryProb * (bestDecimal - 1) - (1 - primaryProb);
 
@@ -153,6 +185,16 @@ export function generateNcaabEvBets(
           outcome = `${info.name} ${info.point}`;
         }
 
+        // ─── Tournament: public bias edge boost ───
+        if (tournCtx.isTournament && tournAdj && tournCtx.publicBiasTeam) {
+          if (mDef.mType === "ml" || mDef.mType === "pl") {
+            const isAgainstPublic = info.name !== tournCtx.publicBiasTeam;
+            if (isAgainstPublic) {
+              primaryEdge += tournAdj.publicBiasEdgeBoost;
+            }
+          }
+        }
+
         // Confidence: pass actual NCAAB GP and goalie-bypassed config
         const conf = computeConfidence(
           primaryEdge,
@@ -165,6 +207,15 @@ export function generateNcaabEvBets(
           mDef.mType,
           cfg,
         );
+
+        // ─── Tournament: apply confidence multiplier ───
+        if (tournCtx.isTournament && tournAdj) {
+          const adjusted = Math.max(0, Math.min(100, conf.score * tournAdj.confidenceMultiplier));
+          conf.score = Math.round(adjusted);
+          // Re-grade based on adjusted score
+          const cuts = cfg.confidenceGradeCutoffs ?? { A: 70, B: 50, C: 30 };
+          conf.grade = adjusted >= cuts.A ? "A" : adjusted >= cuts.B ? "B" : adjusted >= cuts.C ? "C" : "D";
+        }
 
         const { kellyFraction, stake } = computeStake(
           primaryProb, bestDecimal, conf.grade, cfg,
@@ -203,6 +254,7 @@ export function generateNcaabEvBets(
 
 /**
  * Map statistical model probability to a specific market outcome.
+ * When isTournament is true, uses wider sigma from TOURNAMENT_CONFIG.
  */
 function getModelProbForOutcome(
   market: "ml" | "pl" | "totals",
@@ -210,9 +262,12 @@ function getModelProbForOutcome(
   outcomePoint: number | undefined,
   game: GameOdds,
   projection: ReturnType<typeof computeNcaabProjection>,
+  isTournament = false,
 ): number {
+  const sigmaMultiplier = isTournament ? TOURNAMENT_CONFIG.tournamentSigmaMultiplier : 1;
+
   if (market === "ml") {
-    // Moneyline: direct win probability
+    // Moneyline: direct win probability (already adjusted in projection for tournament)
     return outcomeName === game.homeTeam
       ? projection.homeWinProb
       : projection.awayWinProb;
@@ -220,39 +275,24 @@ function getModelProbForOutcome(
 
   if (market === "pl" && outcomePoint != null) {
     // Spread: P(team covers spread)
-    // If home team at -5.5, they need to win by 6+
-    // projected diff = homeExp - awayExp = -(projectedSpread)
-    // team covers if: actualMargin > -point (for home team with negative spread)
-    const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma;
+    const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma * sigmaMultiplier;
     const projectedDiff = -projection.projectedSpread; // home - away
 
     if (outcomeName === game.homeTeam) {
-      // Home team: covers if margin > -point
-      // P(margin > -point) = P(Z > (-point - projDiff) / sigma)
       return 1 - normalCDF((-outcomePoint - projectedDiff) / sigma);
     } else {
-      // Away team: covers if awayMargin > -point, i.e. homeMargin < point
-      // P(homeMargin < point) = P(Z < (point - projDiff) / sigma)
-      // But away spread point is positive (e.g. +5.5), and we want P(away covers)
-      // Away covers when: awayScore + point > homeScore
-      // i.e. homeMargin < point
       return normalCDF((outcomePoint - projectedDiff) / sigma);
     }
   }
 
   if (market === "totals" && outcomePoint != null) {
-    // Totals: model projected total vs line
-    const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma;
+    const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma * sigmaMultiplier;
     const projTotal = projection.projectedTotal;
+    const totalSigma = sigma * 1.2;
 
     if (outcomeName === "Over") {
-      // P(total > line) = 1 - CDF((line - projTotal) / sigma_total)
-      // Use a wider sigma for totals (~13 for NCAAB)
-      const totalSigma = sigma * 1.2;
       return 1 - normalCDF((outcomePoint - projTotal) / totalSigma);
     } else {
-      // Under
-      const totalSigma = sigma * 1.2;
       return normalCDF((outcomePoint - projTotal) / totalSigma);
     }
   }

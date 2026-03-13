@@ -330,6 +330,48 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_param_history_run ON parameter_history(run_id);
   CREATE INDEX IF NOT EXISTS idx_param_history_key ON parameter_history(param_key);
+
+  CREATE TABLE IF NOT EXISTS tournament_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    sport TEXT NOT NULL DEFAULT 'ncaab',
+    postseason INTEGER NOT NULL DEFAULT 1,
+    tournament_round TEXT,
+    neutral_site INTEGER NOT NULL DEFAULT 1,
+    home_court_adj_used REAL NOT NULL DEFAULT 0,
+    home_seed INTEGER,
+    away_seed INTEGER,
+    style_mismatch_score REAL,
+    tempo_mismatch_pct REAL,
+    model_prob REAL,
+    devig_market_prob REAL,
+    model_vs_market_diff REAL,
+    public_bias_team TEXT,
+    short_turnaround INTEGER NOT NULL DEFAULT 0,
+    confidence_multiplier REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_tournament_game ON tournament_games(game_id);
+  CREATE INDEX IF NOT EXISTS idx_tournament_round ON tournament_games(tournament_round);
+
+  CREATE TABLE IF NOT EXISTS tournament_performance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL DEFAULT 'ncaab',
+    season INTEGER NOT NULL,
+    segment TEXT NOT NULL,
+    total_bets INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    pushes INTEGER NOT NULL DEFAULT 0,
+    total_staked REAL NOT NULL DEFAULT 0,
+    total_profit REAL NOT NULL DEFAULT 0,
+    roi_pct REAL NOT NULL DEFAULT 0,
+    avg_edge REAL NOT NULL DEFAULT 0,
+    avg_clv REAL,
+    hit_rate REAL NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tournament_perf_segment ON tournament_performance(sport, season, segment);
 `);
 
 // ─── Seed bankroll if table is empty ───
