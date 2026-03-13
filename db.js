@@ -6,7 +6,12 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, "ev-plus.db");
+
+// Use RAILWAY_VOLUME_MOUNT_PATH for persistent storage across deploys,
+// otherwise fall back to local directory (dev mode).
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+const DB_PATH = join(DATA_DIR, "ev-plus.db");
+console.log(`[db] SQLite path: ${DB_PATH}`);
 
 const db = new Database(DB_PATH);
 
