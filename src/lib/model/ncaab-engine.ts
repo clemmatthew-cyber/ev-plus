@@ -24,10 +24,21 @@ import { computeNcaabProjection, normalCDF } from "./ncaab-model";
 import type { TorvikStats } from "../stats/torvik";
 import { findTeamStats } from "../stats/torvik";
 import { detectTournamentContext, computeTournamentAdjustments, buildTournamentSnapshot } from "./tournament";
-import type { TournamentContext, TournamentAdjustments } from "./tournament";
 import { TOURNAMENT_CONFIG } from "./tournament-config";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+// Backend proxy base for fire-and-forget snapshot saves
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
+/** Fire-and-forget: persist tournament game snapshot to server */
+function saveTournamentSnapshot(gameId: string, snapshot: ReturnType<typeof buildTournamentSnapshot>): void {
+  fetch(`${API_BASE}/api/tournament-snapshot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gameId, snapshot }),
+  }).catch(() => {});
+}
 
 /**
  * Generate NCAAB EV+ bets combining devig pipeline with Torvik statistical model.
@@ -246,6 +257,19 @@ export function generateNcaabEvBets(
           surfacedAt: new Date().toISOString(),
         });
       }
+    }
+
+    // ─── Tournament: save snapshot once per game ───
+    if (tournCtx.isTournament && tournAdj && projection) {
+      const hcaUsed = tournCtx.isNeutralSite ? 0 : NCAAB_CONFIG.ncaabModel.homeCourtAdvantage;
+      const snapshot = buildTournamentSnapshot(
+        tournCtx, tournAdj,
+        projection.homeWinProb,
+        0, // placeholder — devig prob varies by outcome
+        hcaUsed,
+        homeTorvikStats, awayTorvikStats,
+      );
+      saveTournamentSnapshot(game.id, snapshot);
     }
   }
 

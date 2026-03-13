@@ -333,7 +333,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS tournament_games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id TEXT NOT NULL,
+    game_id TEXT NOT NULL UNIQUE,
     sport TEXT NOT NULL DEFAULT 'ncaab',
     postseason INTEGER NOT NULL DEFAULT 1,
     tournament_round TEXT,
@@ -349,9 +349,9 @@ db.exec(`
     public_bias_team TEXT,
     short_turnaround INTEGER NOT NULL DEFAULT 0,
     confidence_multiplier REAL NOT NULL DEFAULT 1.0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (game_id) REFERENCES games(id)
   );
-  CREATE INDEX IF NOT EXISTS idx_tournament_game ON tournament_games(game_id);
   CREATE INDEX IF NOT EXISTS idx_tournament_round ON tournament_games(tournament_round);
 
   CREATE TABLE IF NOT EXISTS tournament_performance (
