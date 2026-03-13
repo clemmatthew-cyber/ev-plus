@@ -25,6 +25,7 @@ import type { TorvikStats } from "../stats/torvik";
 import { findTeamStats } from "../stats/torvik";
 import { detectTournamentContext, computeTournamentAdjustments, buildTournamentSnapshot } from "./tournament";
 import { TOURNAMENT_CONFIG } from "./tournament-config";
+import { computeRankings, detectDefensiveUpset, UPSET_CONFIG } from "./upset-detection";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -37,6 +38,15 @@ function saveTournamentSnapshot(gameId: string, snapshot: ReturnType<typeof buil
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ gameId, snapshot }),
+  }).catch(() => {});
+}
+
+/** Fire-and-forget: persist upset signal to server */
+function saveUpsetSignal(gameId: string, data: Record<string, unknown>): void {
+  fetch(`${API_BASE}/api/upset-signal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gameId, data }),
   }).catch(() => {});
 }
 
@@ -53,6 +63,9 @@ export function generateNcaabEvBets(
   let id = 0;
   const cfg = { ...config, ...NCAAB_CONFIG };
   const seasonGP = NCAAB_CONFIG.ncaabModel.seasonGamesPlayed;
+
+  // ─── Compute rankings ONCE before the game loop ───
+  const rankings = torvikStats ? computeRankings(torvikStats) : null;
 
   for (const game of games) {
     const hA = teamAbbrev(game.homeTeam);
@@ -96,6 +109,53 @@ export function generateNcaabEvBets(
           awayWinProb: 1 - adjustedHomeWinProb,
         };
       }
+    }
+
+    // ─── Defensive upset detection ───
+    let upsetResult = null;
+    if (hasModel && projection && rankings && homeTorvikStats && awayTorvikStats) {
+      upsetResult = detectDefensiveUpset(
+        homeTorvikStats, awayTorvikStats,
+        projection.projectedSpread,
+        projection.homeWinProb, projection.awayWinProb,
+        rankings,
+      );
+
+      // If upset signal fires, adjust projection probabilities
+      if (upsetResult.upsetSignal) {
+        const isHomeUpset = upsetResult.upsetTeam === homeTorvikStats.team;
+        if (isHomeUpset) {
+          projection = {
+            ...projection,
+            homeWinProb: Math.min(projection.homeWinProb + UPSET_CONFIG.winProbBoost, 0.50),
+            awayWinProb: Math.max(projection.awayWinProb - UPSET_CONFIG.winProbBoost, 0.50),
+          };
+        } else {
+          projection = {
+            ...projection,
+            awayWinProb: Math.min(projection.awayWinProb + UPSET_CONFIG.winProbBoost, 0.50),
+            homeWinProb: Math.max(projection.homeWinProb - UPSET_CONFIG.winProbBoost, 0.50),
+          };
+        }
+      }
+
+      // Fire-and-forget save of upset signal
+      saveUpsetSignal(game.id, {
+        underdogTeam: upsetResult.upsetTeam || '',
+        favoriteTeam: upsetResult.upsetTeam === homeTorvikStats.team
+          ? awayTorvikStats.team
+          : homeTorvikStats.team,
+        defensiveMismatch: upsetResult.defensiveMismatch,
+        upsetSignal: upsetResult.upsetSignal,
+        adjDERank: upsetResult.upsetDetails?.adjDERank,
+        tempoRank: upsetResult.upsetDetails?.tempoRank,
+        opponentAdjOERank: upsetResult.upsetDetails?.opponentAdjOERank,
+        originalModelProb: upsetResult.upsetSignal
+          ? (upsetResult.adjustedModelProb - UPSET_CONFIG.winProbBoost)
+          : upsetResult.adjustedModelProb,
+        adjustedModelProb: upsetResult.adjustedModelProb,
+        projectedSpread: projection?.projectedSpread,
+      });
     }
 
     const homeGP = homeTorvikStats?.gamesPlayed ?? seasonGP;
@@ -170,6 +230,13 @@ export function generateNcaabEvBets(
             mDef.mType, info.name, info.point, game, projection,
             tournCtx.isTournament,
           );
+        }
+
+        // ─── Upset detection: boost spread cover prob for the underdog team ───
+        if (upsetResult?.upsetSignal && mDef.mType === "pl" && torvikStats) {
+          if (findTeamStats(info.name, torvikStats)?.team === upsetResult.upsetTeam) {
+            modelProb = Math.min(modelProb + UPSET_CONFIG.spreadCoverBoost, 0.65);
+          }
         }
 
         const modelEdge = modelProb - bestImplied;
@@ -261,6 +328,10 @@ export function generateNcaabEvBets(
           awaySeed: tournCtx.awaySeed,
           seedSource: tournCtx.seedSource,
           shortTurnaround: tournCtx.shortTurnaround,
+          // NCAAB upset detection
+          defensiveMismatch: upsetResult?.defensiveMismatch ?? null,
+          upsetSignal: upsetResult?.upsetSignal ?? false,
+          adjustedModelProb: upsetResult?.adjustedModelProb ?? null,
         });
       }
     }
@@ -330,5 +401,4 @@ function getModelProbForOutcome(
   // Fallback: no model opinion → return 0.5
   return 0.5;
 }
-
 
