@@ -8,6 +8,8 @@ import { fetchNhlOdds } from "./odds";
 import { fetchTeamStats, fetchGoalieStats, leagueAverages, leagueAvg } from "./stats";
 import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } from "./model";
 import { NCAAB_CONFIG } from "./model/ncaab-config";
+import { generateNcaabEvBets } from "./model/ncaab-engine";
+import { fetchTorvikStats } from "./stats/torvik";
 import { fetchRecentSchedule } from "./schedule";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
@@ -88,8 +90,14 @@ export async function runPipeline(
   if (sport === "nhl") {
     bets = await runNhlPipeline(games, config);
   } else if (sport === "ncaab") {
-    // NCAAB → devig model with college-specific thresholds
-    bets = generateNbaEvBets(games, { ...config, ...NCAAB_CONFIG });
+    // NCAAB → Torvik statistical model + devig, with graceful fallback
+    let torvikStats: Map<string, import("./stats/torvik").TorvikStats> | null = null;
+    try {
+      torvikStats = await fetchTorvikStats();
+    } catch {
+      // Torvik fetch failed — fall back to devig-only
+    }
+    bets = generateNcaabEvBets(games, { ...config, ...NCAAB_CONFIG }, torvikStats);
   } else {
     // NBA, MMA, and any future sport → devig model
     bets = generateNbaEvBets(games, config);

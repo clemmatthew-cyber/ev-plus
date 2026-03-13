@@ -20,7 +20,7 @@ import { NBA_CONFIG } from "./nba-config";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
-interface BookDevig {
+export interface BookDevig {
   book: string;
   vig: number;           // total overround (sum of implied probs)
   outcomes: {
@@ -35,7 +35,7 @@ interface BookDevig {
 /**
  * Devig all books for a given market, return per-book devigged lines.
  */
-function devigAllBooks(game: GameOdds, marketKey: string): BookDevig[] {
+export function devigAllBooks(game: GameOdds, marketKey: string): BookDevig[] {
   const results: BookDevig[] = [];
 
   for (const bk of game.bookmakers) {
