@@ -1142,6 +1142,36 @@ app.post("/api/recalibration/reset", (_req, res) => {
 
 // ─── Tournament Endpoints ───
 
+app.post("/api/upset-signal", (req, res) => {
+  try {
+    const { gameId, data } = req.body;
+    if (!gameId || !data) return res.status(400).json({ error: "Missing gameId or data" });
+
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO upset_signals
+        (game_id, sport, underdog_team, favorite_team, defensive_mismatch, upset_signal,
+         adj_de_rank, tempo_rank, opp_adj_oe_rank, original_model_prob, adjusted_model_prob, projected_spread)
+      VALUES (?, 'ncaab', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      gameId,
+      data.underdogTeam || '',
+      data.favoriteTeam || '',
+      data.defensiveMismatch || 0,
+      data.upsetSignal ? 1 : 0,
+      data.adjDERank || null,
+      data.tempoRank || null,
+      data.opponentAdjOERank || null,
+      data.originalModelProb || null,
+      data.adjustedModelProb || null,
+      data.projectedSpread || null,
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/tournament-snapshot", (req, res) => {
   try {
     const { gameId, snapshot } = req.body;
