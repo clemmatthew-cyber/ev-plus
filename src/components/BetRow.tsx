@@ -132,6 +132,11 @@ export default function BetRow({ bet, movement, onToggle }: Props) {
               {bet.tournamentType === 'conference' ? 'CONF' : 'NCAA'}
             </span>
           )}
+          {bet.upsetSignal && (
+            <span className="flex-shrink-0 text-[9px] font-semibold px-1 py-0.5 rounded bg-red-500/20 text-red-300" title="Defensive upset signal">
+              UPSET
+            </span>
+          )}
           <div className="hidden sm:block w-14 flex-shrink-0 text-xs text-[#737373] font-mono">
             {fmtTime(bet.gameTime)}
           </div>
@@ -250,6 +255,14 @@ export default function BetRow({ bet, movement, onToggle }: Props) {
                   {fmtTime(bet.gameTime)}
                 </span>
               </div>
+              {bet.upsetSignal && bet.defensiveMismatch != null && (
+                <div>
+                  <span className="text-[#737373]">Def Mismatch</span>
+                  <span className="ml-2 font-mono text-red-300">
+                    {bet.defensiveMismatch.toFixed(1)}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Bet Now deep-link */}

@@ -26,6 +26,10 @@ export interface EvBet {
   awaySeed?: number | null;
   seedSource?: 'actual' | 'estimated';
   shortTurnaround?: { home: boolean; away: boolean };
+  // NCAAB upset detection (optional — only present for NCAAB games)
+  defensiveMismatch?: number | null;
+  upsetSignal?: boolean;
+  adjustedModelProb?: number | null;
 }
 
 // ─── Tracked bet: full snapshot saved when user taps checkmark ───
