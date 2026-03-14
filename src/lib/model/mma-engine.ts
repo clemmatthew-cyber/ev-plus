@@ -24,33 +24,91 @@ import type { ModelConfig } from "./config";
 import { MMA_CONFIG } from "./mma-config";
 import type { FighterStats } from "../stats/ufcstats";
 import { findFighterStats } from "../stats/ufcstats";
-import { eloWinProb, bootstrapElo } from "./mma-elo";
+import { eloWinProb, bootstrapElo, sequentialElo } from "./mma-elo";
 import { computeFinishProbs, finishTypeAdvantage, type FinishProbabilities } from "./mma-finish";
 import { styleMatchupAdvantage, stanceMismatch, pressureCounterAdvantage, computeRecentForm, recentFormAdvantage } from "./mma-style";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 // ─── Feature Weight Constants ───
-// 12-feature table — weights sum to 1.00
+// 13-feature table — weights sum to 1.00
 const WEIGHTS = {
-  elo:                 0.30,   // Elo win probability (strongest single predictor)
-  strikingDiff:        0.12,   // SLpM differential + accuracy
+  elo:                 0.28,   // Sequential Elo win probability (strongest single predictor)
+  strikingDiff:        0.11,   // SLpM differential + accuracy
   grapplingDiff:       0.08,   // TD differential + sub threat
-  defenseDiff:         0.07,   // Str.Def + TD Def
+  defenseDiff:         0.06,   // Str.Def + TD Def
   reachAdvantage:      0.08,   // Reach differential (top predictive feature per research)
-  ageFactor:           0.07,   // Age differential — now uses real DOB when available
+  ageFactor:           0.06,   // Age differential — uses real DOB when available
   experienceDiff:      0.03,   // Career fights differential
-  finishTypeAdvantage: 0.08,   // Finish profile exploitation
+  finishTypeAdvantage: 0.07,   // Finish profile exploitation
   styleMatchup:        0.06,   // Striker vs grappler interaction
   stanceMismatch:      0.03,   // Southpaw/switch edge
   pressureCounter:     0.03,   // Striking efficiency matchup
   recentForm:          0.05,   // Momentum from last 3/5 fights
+  layoffFactor:        0.06,   // Ring rust / layoff penalty
 };
 
 // ─── Sigmoid Helper ───
 // Maps any real value to (0, 1), centered at 0.5.
 export function sigmoid(x: number, scale: number): number {
   return 1 / (1 + Math.exp(-x * scale));
+}
+
+// ─── Layoff / Ring Rust Factor ───
+// Sweet spot: 60-180 days between fights (slight boost).
+// 180-365 days: neutral.
+// 365+ days: increasing penalty (ring rust).
+// <45 days: slight penalty (short turnaround, potential accumulated damage).
+
+/**
+ * Compute days since last fight from fight history.
+ * Returns null if no date data is available.
+ */
+function daysSinceLastFight(history: import("../stats/ufcstats").FightRecord[]): number | null {
+  if (!history || history.length === 0) return null;
+
+  // Fight history is most-recent-first from UFCStats
+  const lastFight = history[0];
+  if (!lastFight.eventDate) return null;
+
+  const parsed = new Date(lastFight.eventDate);
+  if (isNaN(parsed.getTime())) return null;
+
+  const now = new Date();
+  const diffMs = now.getTime() - parsed.getTime();
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Layoff advantage: compares ring rust / activity between two fighters.
+ * Uses days since last fight to compute an activity score:
+ *   - 60–180 days: optimal (score = 0.55)
+ *   - 180–365 days: neutral (score = 0.50)
+ *   - 365–550 days: mild rust (score = 0.43)
+ *   - 550+ days: significant rust (score = 0.35)
+ *   - <45 days: short turnaround penalty (score = 0.45)
+ *   - null: neutral (score = 0.50)
+ * Returns [0, 1]; 0.5 = neutral, >0.5 = favors A.
+ */
+function layoffAdvantage(a: FighterStats, b: FighterStats): number {
+  function activityScore(days: number | null): number {
+    if (days == null) return 0.50;
+    if (days < 45)   return 0.45;   // short turnaround
+    if (days <= 180) return 0.55;   // sweet spot
+    if (days <= 365) return 0.50;   // normal
+    if (days <= 550) return 0.43;   // mild ring rust
+    return 0.35;                    // significant ring rust
+  }
+
+  const aDays = daysSinceLastFight(a.fightHistory);
+  const bDays = daysSinceLastFight(b.fightHistory);
+
+  const aScore = activityScore(aDays);
+  const bScore = activityScore(bDays);
+
+  // Difference mapped through sigmoid for smooth output
+  const diff = aScore - bScore;
+  return sigmoid(diff, 8.0);  // scale=8: a 0.10 diff ≈ 0.69 advantage
 }
 
 // ─── Feature Computation Functions ───
@@ -141,7 +199,7 @@ export interface MmaModelResult {
 
 /**
  * Compute the combined MMA model probability for fighter A beating fighter B.
- * Weighted blend of Elo + 11 statistical differentials (12 features total).
+ * Weighted blend of Elo + 12 statistical differentials (13 features total).
  * Returns win probability + finish method probabilities.
  * Win probability is clamped to [0.05, 0.95] — never give absolute certainty.
  */
@@ -170,6 +228,7 @@ function computeMmaModelProb(
     stanceMismatch:      stanceMismatch(a, b),
     pressureCounter:     pressureCounterAdvantage(a, b),
     recentForm:          recentFormAdvantage(aForm, bForm),
+    layoffFactor:        layoffAdvantage(a, b),
   };
 
   let modelProb = 0;
@@ -220,9 +279,13 @@ export function generateMmaEvBets(
       : null;
     const hasModel = homeFighterStats != null && awayFighterStats != null;
 
-    // ─── Bootstrap Elo from career record ───
-    const homeElo = homeFighterStats ? bootstrapElo(homeFighterStats).elo : 1500;
-    const awayElo = awayFighterStats ? bootstrapElo(awayFighterStats).elo : 1500;
+    // ─── Sequential Elo from fight history (falls back to bootstrap) ───
+    const homeElo = homeFighterStats
+      ? sequentialElo(homeFighterStats, fighterStats!).elo
+      : 1500;
+    const awayElo = awayFighterStats
+      ? sequentialElo(awayFighterStats, fighterStats!).elo
+      : 1500;
 
     // ─── Pre-compute model probabilities for both sides (if stats available) ───
     // homeModelProb = P(home fighter wins)
