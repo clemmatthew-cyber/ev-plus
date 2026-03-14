@@ -933,5 +933,392 @@ async function fetchDailyFaceoffGoalies(dateStr) {
         for (let i = 0; i < Math.min(teams.length, goalieEls.length); i++) {
           const goalieName = $(goalieEls[i]).text().trim();
           const statusText = statusEls[i] ? $(statusEls[i]).text() : $card.text();
-          if (goalieName && goalieNam
-... [truncated, 43815 chars total]
+          if (goalieName && goalieName.length > 2) {
+            confirmations.push({
+              team: teams[i],
+              goalieName,
+              status: parseGoalieStatus(statusText),
+              source: "dailyfaceoff",
+            });
+          }
+        }
+      }
+    }
+
+    return confirmations;
+  } catch (err) {
+    console.warn("[goalie-conf] DailyFaceoff fetch failed:", err.message);
+    return [];
+  }
+}
+
+async function getGoalieConfirmations(dateStr) {
+  const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+
+  // Check cache
+  if (goalieConfCache.data && goalieConfCache.date === targetDate &&
+      Date.now() - goalieConfCache.ts < GOALIE_CACHE_TTL) {
+    return { date: targetDate, confirmations: goalieConfCache.data, cached: true };
+  }
+
+  const confirmations = await fetchDailyFaceoffGoalies(dateStr);
+
+  // Save to SQLite
+  for (const c of confirmations) {
+    try {
+      db.upsertGoalieConfirmation({
+        game_date: targetDate,
+        team: c.team,
+        goalie_name: c.goalieName,
+        status: c.status,
+        source: c.source,
+      });
+    } catch (err) {
+      console.warn("[goalie-conf] DB upsert error:", err.message);
+    }
+  }
+
+  // Update cache
+  if (!dateStr || dateStr === new Date().toISOString().slice(0, 10)) {
+    goalieConfCache.data = confirmations;
+    goalieConfCache.ts = Date.now();
+    goalieConfCache.date = targetDate;
+  }
+
+  return { date: targetDate, confirmations };
+}
+
+// Route: GET /api/goalie-confirmations
+app.get("/api/goalie-confirmations", async (_req, res) => {
+  try {
+    const result = await getGoalieConfirmations();
+    res.json(result);
+  } catch (err) {
+    console.error("[goalie-conf] route error:", err.message);
+    res.json({ date: new Date().toISOString().slice(0, 10), confirmations: [], error: "source_unavailable" });
+  }
+});
+
+// Route: GET /api/goalie-confirmations/:date
+app.get("/api/goalie-confirmations/:date", async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "Invalid date format, use YYYY-MM-DD" });
+  }
+  try {
+    const result = await getGoalieConfirmations(date);
+    res.json(result);
+  } catch (err) {
+    console.error("[goalie-conf] route error:", err.message);
+    res.json({ date, confirmations: [], error: "source_unavailable" });
+  }
+});
+
+// Route: GET /api/lineup-adjustments
+app.get("/api/lineup-adjustments", (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = db.getLineupAdjustmentsByDate(today);
+  res.json({ date: today, adjustments: rows });
+});
+
+// Route: GET /api/lineup-adjustments/:date
+app.get("/api/lineup-adjustments/:date", (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "Invalid date format, use YYYY-MM-DD" });
+  }
+  const rows = db.getLineupAdjustmentsByDate(date);
+  res.json({ date, adjustments: rows });
+});
+
+// ─── Alert Routes ───
+
+app.get("/api/alerts", (req, res) => {
+  const type = req.query.type || null;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  let rows = db.getActiveAlerts(type);
+  rows = rows.slice(0, limit);
+  const alerts = rows.map(r => ({
+    id: r.id,
+    alertType: r.alert_type,
+    severity: r.severity,
+    gameId: r.game_id,
+    market: r.market,
+    outcome: r.outcome,
+    book: r.book,
+    headline: r.headline,
+    detail: JSON.parse(r.detail || "{}"),
+    modelEdge: r.model_edge,
+    confidenceScore: r.confidence_score,
+    isRead: !!r.is_read,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  }));
+  const unreadCount = db.getUnreadAlertCount();
+  res.json({ ok: true, alerts, unreadCount });
+});
+
+app.get("/api/alerts/count", (_req, res) => {
+  const unreadCount = db.getUnreadAlertCount();
+  res.json({ ok: true, unreadCount });
+});
+
+app.post("/api/alerts/:id/read", (req, res) => {
+  db.markAlertRead(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+app.post("/api/alerts/:id/dismiss", (req, res) => {
+  db.markAlertDismissed(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+app.post("/api/alerts/run", (_req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    // Get latest odds snapshots from today
+    const allOdds = db.getAllOddsHistory().filter(r => r.snapshot_at.startsWith(today));
+    const bets = db.getAllBets().filter(b => b.result === "pending");
+    const goalieConfs = db.getGoalieConfirmationsByDate(today);
+    const result = runAlertEngine(allOdds, bets, goalieConfs);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[alerts/run] Error:", err.message);
+    res.status(500).json({ error: "Alert engine failed", detail: err.message });
+  }
+});
+
+// ─── Recalibration API ───
+
+app.get("/api/recalibration/parameters", (_req, res) => {
+  try {
+    const parameters = db.getAllModelParams();
+    const lastRecalibration = db.getLatestRecalibrationRun();
+    res.json({ ok: true, parameters, lastRecalibration });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch parameters", detail: err.message });
+  }
+});
+
+app.get("/api/recalibration/history", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const runs = db.getRecentRecalibrationRuns(limit);
+    res.json({ ok: true, runs });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch history", detail: err.message });
+  }
+});
+
+app.get("/api/recalibration/history/:runId", (req, res) => {
+  try {
+    const run = db.getRecalibrationRun(parseInt(req.params.runId));
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    const changes = db.getParameterHistoryByRun(run.id);
+    res.json({ ok: true, run, changes });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch run", detail: err.message });
+  }
+});
+
+app.post("/api/recalibration/run", (_req, res) => {
+  try {
+    const result = runRecalibration("manual");
+    res.json(result);
+  } catch (err) {
+    console.error("[recalibration/run] Error:", err.message);
+    res.status(500).json({ ok: false, error: "Recalibration failed", detail: err.message });
+  }
+});
+
+app.post("/api/recalibration/reset", (_req, res) => {
+  try {
+    db.resetAllModelParams();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to reset parameters", detail: err.message });
+  }
+});
+
+// ─── Tournament Endpoints ───
+
+app.post("/api/upset-signal", (req, res) => {
+  try {
+    const { gameId, data } = req.body;
+    if (!gameId || !data) return res.status(400).json({ error: "Missing gameId or data" });
+
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO upset_signals
+        (game_id, sport, underdog_team, favorite_team, defensive_mismatch, upset_signal,
+         adj_de_rank, tempo_rank, opp_adj_oe_rank, original_model_prob, adjusted_model_prob, projected_spread)
+      VALUES (?, 'ncaab', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      gameId,
+      data.underdogTeam || '',
+      data.favoriteTeam || '',
+      data.defensiveMismatch || 0,
+      data.upsetSignal ? 1 : 0,
+      data.adjDERank || null,
+      data.tempoRank || null,
+      data.opponentAdjOERank || null,
+      data.originalModelProb || null,
+      data.adjustedModelProb || null,
+      data.projectedSpread || null,
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/tournament-snapshot", (req, res) => {
+  try {
+    const { gameId, snapshot } = req.body;
+    if (!gameId || !snapshot) return res.status(400).json({ error: "missing fields" });
+
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO tournament_games (
+        game_id, sport, postseason, tournament_round, neutral_site,
+        home_court_adj_used, home_seed, away_seed, style_mismatch_score,
+        tempo_mismatch_pct, model_prob, devig_market_prob, model_vs_market_diff,
+        public_bias_team, short_turnaround, confidence_multiplier
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      gameId, "ncaab", snapshot.postseason ? 1 : 0, snapshot.tournamentRound,
+      snapshot.neutralSite ? 1 : 0, snapshot.homeCurtAdjUsed,
+      snapshot.homeSeed, snapshot.awaySeed, snapshot.styleMismatchScore,
+      snapshot.tempoMismatchPct, snapshot.modelProb, snapshot.devigMarketProb,
+      snapshot.modelVsMarketDiff, snapshot.publicBiasTeam,
+      (snapshot.shortTurnaround?.home || snapshot.shortTurnaround?.away) ? 1 : 0, snapshot.confidenceMultiplier
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save tournament snapshot", detail: err.message });
+  }
+});
+
+app.get("/api/tournament-performance", (req, res) => {
+  try {
+    const season = req.query.season || new Date().getFullYear();
+    const rows = db.prepare(
+      "SELECT * FROM tournament_performance WHERE season = ? ORDER BY segment"
+    ).all(season);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch tournament performance", detail: err.message });
+  }
+});
+
+app.post("/api/tournament-performance/compute", (req, res) => {
+  try {
+    const season = new Date().getFullYear();
+
+    const tournBets = db.prepare(`
+      SELECT b.*, tg.home_seed, tg.away_seed, tg.public_bias_team, tg.tournament_round
+      FROM bets b
+      JOIN tournament_games tg ON b.game_id = tg.game_id
+      WHERE b.result IN ('win', 'loss', 'push')
+    `).all();
+
+    if (tournBets.length === 0) return res.json({ ok: true, message: "no data" });
+
+    // Compute segments
+    const segments = ["all_tournament", "favorites", "underdogs", "overs", "unders", "high_seeds", "low_seeds"];
+    const upsert = db.prepare(`
+      INSERT INTO tournament_performance (sport, season, segment, total_bets, wins, losses, pushes, total_staked, total_profit, roi_pct, avg_edge, hit_rate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sport, season, segment) DO UPDATE SET
+        total_bets=excluded.total_bets, wins=excluded.wins, losses=excluded.losses,
+        pushes=excluded.pushes, total_staked=excluded.total_staked, total_profit=excluded.total_profit,
+        roi_pct=excluded.roi_pct, avg_edge=excluded.avg_edge, hit_rate=excluded.hit_rate,
+        computed_at=datetime('now')
+    `);
+
+    for (const seg of segments) {
+      const filtered = tournBets.filter(b => {
+        if (seg === "all_tournament") return true;
+        if (seg === "favorites") return b.market === "ml" && b.edge > 0;
+        if (seg === "underdogs") return b.market === "ml" && b.odds_at_pick > 0;
+        if (seg === "overs") return b.market === "totals" && b.outcome && b.outcome.startsWith("Over");
+        if (seg === "unders") return b.market === "totals" && b.outcome && b.outcome.startsWith("Under");
+        if (seg === "high_seeds") return (b.home_seed && b.home_seed <= 4) || (b.away_seed && b.away_seed <= 4);
+        if (seg === "low_seeds") return (b.home_seed && b.home_seed > 4) || (b.away_seed && b.away_seed > 4);
+        return false;
+      });
+
+      const wins = filtered.filter(b => b.result === "win").length;
+      const losses = filtered.filter(b => b.result === "loss").length;
+      const pushes = filtered.filter(b => b.result === "push").length;
+      const totalStaked = filtered.reduce((s, b) => s + (b.stake || 0), 0);
+      const totalProfit = filtered.reduce((s, b) => s + (b.profit_loss || 0), 0);
+      const roiPct = totalStaked > 0 ? (totalProfit / totalStaked) * 100 : 0;
+      const avgEdge = filtered.length > 0 ? filtered.reduce((s, b) => s + (b.edge || 0), 0) / filtered.length : 0;
+      const hitRate = (wins + losses) > 0 ? wins / (wins + losses) : 0;
+
+      upsert.run("ncaab", season, seg, filtered.length, wins, losses, pushes, totalStaked, totalProfit, roiPct, avgEdge, hitRate);
+    }
+
+    res.json({ ok: true, computed: tournBets.length });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to compute tournament performance", detail: err.message });
+  }
+});
+
+// ─── MMA fighter stats diagnostic ───
+
+app.get("/api/mma/fighters", async (req, res) => {
+  try {
+    // Import dynamically since it's a TS module compiled to dist
+    const stats = await import("./dist/lib/stats/ufcstats.js");
+    const map = await stats.fetchUfcStats();
+    const fighters = [...map.values()].sort((a, b) => {
+      const aTotal = a.wins + a.losses + a.draws;
+      const bTotal = b.wins + b.losses + b.draws;
+      return bTotal - aTotal;
+    });
+    res.json({ count: fighters.length, fighters: fighters.slice(0, 100) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Static files (React dist) ───
+
+app.use(express.static(join(__dirname, "dist")));
+app.get("/{*splat}", (_req, res) => {
+  res.sendFile(join(__dirname, "dist", "index.html"));
+});
+
+// ─── Start ───
+
+app.listen(PORT, () => {
+  console.log(`[server] NHL EV+ running on http://localhost:${PORT} (SQLite persistence)`);
+});
+
+// ─── Weekly Recalibration Scheduler ───
+
+const RECAL_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function maybeRunWeeklyRecalibration() {
+  if (process.env.RECALIBRATION_ENABLED === "false") return;
+  const lastRun = db.getLatestRecalibrationRun();
+  if (lastRun) {
+    const lastRunTime = new Date(lastRun.created_at + "Z").getTime();
+    const elapsed = Date.now() - lastRunTime;
+    if (elapsed < RECAL_INTERVAL) return;
+  }
+  console.log("[RECAL] Starting weekly recalibration...");
+  try {
+    const result = runRecalibration("weekly");
+    console.log(`[RECAL] Complete: ${result.paramsChanged ?? 0} params updated in ${result.duration ?? 0}ms`);
+  } catch (err) {
+    console.error("[RECAL] Weekly recalibration failed:", err.message);
+  }
+}
+
+setTimeout(maybeRunWeeklyRecalibration, 30000);
+setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000);
