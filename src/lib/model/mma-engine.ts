@@ -25,23 +25,31 @@ import { MMA_CONFIG } from "./mma-config";
 import type { FighterStats } from "../stats/ufcstats";
 import { findFighterStats } from "../stats/ufcstats";
 import { eloWinProb, bootstrapElo } from "./mma-elo";
+import { computeFinishProbs, finishTypeAdvantage, type FinishProbabilities } from "./mma-finish";
+import { styleMatchupAdvantage, stanceMismatch, pressureCounterAdvantage, computeRecentForm, recentFormAdvantage } from "./mma-style";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 // ─── Feature Weight Constants ───
+// 12-feature table — weights sum to 1.00
 const WEIGHTS = {
-  elo: 0.40,              // Elo win probability (strongest single predictor)
-  strikingDiff: 0.15,     // SLpM differential + accuracy
-  grapplingDiff: 0.10,    // TD differential + sub threat
-  defenseDiff: 0.10,      // Str.Def + TD Def
-  reachAdvantage: 0.10,   // Reach differential (top predictive feature per research)
-  ageFactor: 0.10,        // Age differential (top-2 most predictive feature)
-  experienceDiff: 0.05,   // Career fights differential
+  elo:                 0.30,   // Elo win probability (strongest single predictor)
+  strikingDiff:        0.12,   // SLpM differential + accuracy
+  grapplingDiff:       0.08,   // TD differential + sub threat
+  defenseDiff:         0.07,   // Str.Def + TD Def
+  reachAdvantage:      0.08,   // Reach differential (top predictive feature per research)
+  ageFactor:           0.07,   // Age differential — now uses real DOB when available
+  experienceDiff:      0.03,   // Career fights differential
+  finishTypeAdvantage: 0.08,   // Finish profile exploitation
+  styleMatchup:        0.06,   // Striker vs grappler interaction
+  stanceMismatch:      0.03,   // Southpaw/switch edge
+  pressureCounter:     0.03,   // Striking efficiency matchup
+  recentForm:          0.05,   // Momentum from last 3/5 fights
 };
 
 // ─── Sigmoid Helper ───
 // Maps any real value to (0, 1), centered at 0.5.
-function sigmoid(x: number, scale: number): number {
+export function sigmoid(x: number, scale: number): number {
   return 1 / (1 + Math.exp(-x * scale));
 }
 
@@ -94,14 +102,24 @@ function reachAdvantage(a: FighterStats, b: FighterStats): number {
 }
 
 /**
- * Age/freshness advantage: use total fights as proxy for career length.
- * Slight edge to fighter with fewer fights (younger/hungrier) if similar quality.
- * Future enhancement: fetch DOB from detail pages.
+ * Age/freshness advantage.
+ * Uses real age from DOB when available (from detail page enrichment).
+ * Falls back to total-fights proxy when DOB is not available.
+ * Younger fighters closer to the MMA peak age (~28-32) get a slight edge.
  */
 function ageAdvantage(a: FighterStats, b: FighterStats): number {
+  // Prefer real age if available
+  if (a.age != null && b.age != null) {
+    // Younger fighter gets slight edge (peak MMA age ~28-32)
+    const aAgePenalty = Math.abs(a.age - 30) * 0.02;  // distance from peak
+    const bAgePenalty = Math.abs(b.age - 30) * 0.02;
+    const diff = bAgePenalty - aAgePenalty;  // positive = A closer to peak
+    return sigmoid(diff, 3.0);
+  }
+
+  // Fallback: use total fights as proxy (original logic)
   const aFights = a.wins + a.losses + a.draws;
   const bFights = b.wins + b.losses + b.draws;
-  // Slight edge to fighter with fewer fights (fresher/younger)
   const diff = (bFights - aFights) * 0.3;
   return sigmoid(diff, 0.5);
 }
@@ -116,26 +134,42 @@ function experienceAdvantage(a: FighterStats, b: FighterStats): number {
   return sigmoid(diff * 0.1, 1.0);
 }
 
+export interface MmaModelResult {
+  winProb: number;
+  finishProbs: FinishProbabilities;  // { koProb, subProb, decProb }
+}
+
 /**
  * Compute the combined MMA model probability for fighter A beating fighter B.
- * Weighted blend of Elo + five statistical differentials.
- * Clamped to [0.05, 0.95] — never give absolute certainty.
+ * Weighted blend of Elo + 11 statistical differentials (12 features total).
+ * Returns win probability + finish method probabilities.
+ * Win probability is clamped to [0.05, 0.95] — never give absolute certainty.
  */
 function computeMmaModelProb(
   a: FighterStats,
   b: FighterStats,
   eloA: number,
   eloB: number,
-): number {
+): MmaModelResult {
   const eloProbA = eloWinProb(eloA, eloB);
+
+  // Compute recent form for each fighter from their fight history
+  const aForm = computeRecentForm(a.fightHistory);
+  const bForm = computeRecentForm(b.fightHistory);
+
   const features = {
-    elo: eloProbA,
-    strikingDiff: strikingAdvantage(a, b),
-    grapplingDiff: grapplingAdvantage(a, b),
-    defenseDiff: defenseAdvantage(a, b),
-    reachAdvantage: reachAdvantage(a, b),
-    ageFactor: ageAdvantage(a, b),
-    experienceDiff: experienceAdvantage(a, b),
+    elo:                 eloProbA,
+    strikingDiff:        strikingAdvantage(a, b),
+    grapplingDiff:       grapplingAdvantage(a, b),
+    defenseDiff:         defenseAdvantage(a, b),
+    reachAdvantage:      reachAdvantage(a, b),
+    ageFactor:           ageAdvantage(a, b),
+    experienceDiff:      experienceAdvantage(a, b),
+    finishTypeAdvantage: finishTypeAdvantage(a, b),
+    styleMatchup:        styleMatchupAdvantage(a, b),
+    stanceMismatch:      stanceMismatch(a, b),
+    pressureCounter:     pressureCounterAdvantage(a, b),
+    recentForm:          recentFormAdvantage(aForm, bForm),
   };
 
   let modelProb = 0;
@@ -144,7 +178,12 @@ function computeMmaModelProb(
   }
 
   // Clamp to [0.05, 0.95] — never give absolute certainty
-  return Math.max(0.05, Math.min(0.95, modelProb));
+  const winProb = Math.max(0.05, Math.min(0.95, modelProb));
+
+  // Compute finish method probabilities
+  const finishProbs = computeFinishProbs(a, b);
+
+  return { winProb, finishProbs };
 }
 
 /**
@@ -187,9 +226,13 @@ export function generateMmaEvBets(
 
     // ─── Pre-compute model probabilities for both sides (if stats available) ───
     // homeModelProb = P(home fighter wins)
-    const homeModelProb = hasModel
+    const homeModelResult = hasModel
       ? computeMmaModelProb(homeFighterStats!, awayFighterStats!, homeElo, awayElo)
       : null;
+    const homeModelProb = homeModelResult?.winProb ?? null;
+    // Store finish probs for future use (informational — not used in EV calc)
+    const _finishProbs = homeModelResult?.finishProbs ?? null;
+    void _finishProbs;
     const awayModelProb = homeModelProb != null ? 1 - homeModelProb : null;
 
     for (const mDef of marketDefs) {
