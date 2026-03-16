@@ -12,6 +12,7 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    sourcemap: "hidden",  // F-23: no public source maps in production
   },
   server: {
     proxy: {

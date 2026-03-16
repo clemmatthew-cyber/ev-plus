@@ -1,18 +1,13 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* F-8: Font loading via <link> in index.html — no duplicate @import needed */
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* F-12: Only keep CSS variables that are actually referenced */
 :root {
   --bg: #0a0a0a;
   --fg: #ededed;
-  --muted: #737373;
-  --border: #242424;
-  --card: #121212;
-  --green: #22c55e;
-  --red: #ef4444;
-  --amber: #f59e0b;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

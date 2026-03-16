@@ -42,7 +42,7 @@ export function computeConfidence(
   const w = cfg.confidence;
 
   // 1. Edge magnitude: 0-100 scale, 100 at 10% above min edge
-  const edgeScore = Math.min(((edge - minEdge) / 0.07) * 100, 100);
+  const edgeScore = Math.max(0, Math.min(((edge - minEdge) / 0.07) * 100, 100));  // C-7: prevent negative
 
   // 2. Line sharpness: reward edges where multiple books cluster near the same price
   //    (moved from agreement to avoid penalizing the very edges we're looking for)

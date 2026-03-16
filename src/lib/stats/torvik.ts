@@ -41,14 +41,23 @@ const CACHE_TTL = 60 * 60 * 1000; // 1 hour
  * Caches for 1 hour per pipeline run.
  */
 export async function fetchTorvikStats(): Promise<Map<string, TorvikStats>> {
-  const now = Date.now();
-  if (cachedStats && now - cacheTimestamp < CACHE_TTL) {
+  const nowMs = Date.now();
+  if (cachedStats && nowMs - cacheTimestamp < CACHE_TTL) {
     return cachedStats;
   }
 
-  const year = new Date().getFullYear();
+  // NC-15: Proper season derivation — NCAAB season spans Nov-April
+  const now = new Date();
+  const month = now.getMonth(); // 0-indexed
+  const year = month >= 10 ? now.getFullYear() + 1 : now.getFullYear();
   const url = `https://barttorvik.com/trank.php?year=${year}&json=1`;
   const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+
+  // NC-25: AbortController with 15s timeout for Torvik requests
+  const controller = new AbortController();
+  const fetchTimeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
 
   // Step 1: POST with js_test_submitted=1 (don't follow redirect)
   const step1 = await fetch(url, {
@@ -59,6 +68,7 @@ export async function fetchTorvikStats(): Promise<Map<string, TorvikStats>> {
     },
     body: "js_test_submitted=1",
     redirect: "manual",
+    signal: controller.signal,
   });
 
   // Extract the js_verified cookie from the 302 response
@@ -85,6 +95,7 @@ export async function fetchTorvikStats(): Promise<Map<string, TorvikStats>> {
       "User-Agent": ua,
       ...(cookie ? { "Cookie": cookie } : {}),
     },
+    signal: controller.signal,
   });
 
   if (!step2.ok) {
@@ -103,17 +114,25 @@ export async function fetchTorvikStats(): Promise<Map<string, TorvikStats>> {
   let totalOE = 0;
   let countOE = 0;
 
+  // NC-26: Named constants for Torvik field indices
+  const TORVIK_FIELD = { TEAM: 0, ADJOE: 1, ADJDE: 2, BARTHAG: 3, WINS: 5, GP: 6, TEMPO: 15, SOS: 34 } as const;
+
   for (const row of raw) {
-    if (!row[0] || typeof row[1] !== "number") continue;
+    // NC-26: Validate row structure before accessing indices
+    if (!Array.isArray(row) || row.length < 35) {
+      console.warn(`[Torvik] Skipping malformed row: length=${row?.length}`);
+      continue;
+    }
+    if (!row[TORVIK_FIELD.TEAM] || typeof row[TORVIK_FIELD.ADJOE] !== "number") continue;
     const stats: TorvikStats = {
-      team: row[0],
-      adjOE: row[1],
-      adjDE: row[2],
-      barthag: row[3],
-      tempo: row[15],
-      sos: row[34],
-      gamesPlayed: row[6] ?? 0,
-      wins: row[5] ?? 0,
+      team: row[TORVIK_FIELD.TEAM],
+      adjOE: row[TORVIK_FIELD.ADJOE],
+      adjDE: row[TORVIK_FIELD.ADJDE],
+      barthag: row[TORVIK_FIELD.BARTHAG],
+      tempo: row[TORVIK_FIELD.TEMPO],
+      sos: row[TORVIK_FIELD.SOS],
+      gamesPlayed: row[TORVIK_FIELD.GP] ?? 0,
+      wins: row[TORVIK_FIELD.WINS] ?? 0,
     };
     map.set(stats.team, stats);
     totalOE += row[1];
@@ -126,8 +145,12 @@ export async function fetchTorvikStats(): Promise<Map<string, TorvikStats>> {
   }
 
   cachedStats = map;
-  cacheTimestamp = now;
+  cacheTimestamp = nowMs;
   return map;
+
+  } finally {
+    clearTimeout(fetchTimeout);
+  }
 }
 
 /** Clear the cache (useful for testing) */
@@ -461,7 +484,11 @@ export function findTeamStats(
     }
   }
 
-  if (bestScore >= 0.6) return statsMap.get(bestMatch)!;
+  // NC-16: Raised from 0.6 to 0.75 to prevent dangerous mismatches
+  if (bestScore >= 0.75 && bestMatch) {
+    console.warn(`[Torvik] Fuzzy match: "${school}" → "${bestMatch}" (score: ${bestScore.toFixed(2)})`);
+    return statsMap.get(bestMatch)!;
+  }
 
   return null;
 }

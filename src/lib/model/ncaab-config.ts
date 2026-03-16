@@ -20,6 +20,7 @@ export const NCAAB_CONFIG = {
     scoringMarginSigma: 11.0,    // std dev of scoring margin in NCAAB
     leagueAvgPtsPerPoss: 1.0,    // NCAA D1 average (~1.0 pts per possession)
     seasonGamesPlayed: 33,       // typical NCAAB regular season length
+    totalsSigma: 11.0,           // NC-8: dedicated sigma for totals (was sigma * 1.2)
   },
 
   // ─── Depth Score ───

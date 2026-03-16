@@ -1,3 +1,4 @@
+// @ts-check
 // ─── Sportsbook Intelligence & Sharp-Book Detection Engine ───
 // Analyzes odds data across all books to detect sharp books, first-movers,
 // consensus/outliers, and provides sharp-book signals for confidence scoring.

@@ -5,6 +5,11 @@
  * American odds → implied probability (no-vig not accounted for).
  */
 export function americanToImplied(odds: number): number {
+  // C-30: Validate American odds range
+  if (odds === 0) { console.warn('americanToImplied: odds=0 is invalid'); return 0.5; }
+  if (Math.abs(odds) < 100 && odds !== 0) {
+    console.warn(`americanToImplied: unusual odds ${odds}`);
+  }
   if (odds > 0) return 100 / (odds + 100);
   return Math.abs(odds) / (Math.abs(odds) + 100);
 }
@@ -36,7 +41,7 @@ export function shinDevig(rawProbs: number[]): number[] {
 
   // Binary search for exponent k where sum(p^k) = 1
   let lo = 0.01;
-  let hi = 5.0;
+  let hi = 20.0;  // C-5: widened from 5.0 for extreme vig scenarios
   for (let iter = 0; iter < 80; iter++) {
     const mid = (lo + hi) / 2;
     const sum = rawProbs.reduce((s, p) => s + Math.pow(Math.max(p, 0.001), mid), 0);
@@ -73,4 +78,18 @@ export function fairProbForOutcome(
   const rawProbs = allOdds.map(americanToImplied);
   const fair = shinDevig(rawProbs);
   return fair[targetIndex] ?? 0;
+}
+
+/**
+ * C-26: Cross-check Shin (power) devig against multiplicative devig.
+ * Warns when results diverge significantly, indicating unusual market structure.
+ */
+export function devigWithCrossCheck(rawProbs: number[]): { fair: number[], method: string, divergence: number } {
+  const shin = shinDevig(rawProbs);
+  const mult = multiplicativeDevig(rawProbs);
+  const maxDivergence = Math.max(...shin.map((s, i) => Math.abs(s - mult[i])));
+  if (maxDivergence > 0.03) {
+    console.warn(`[Devig] Shin/mult diverge by ${(maxDivergence * 100).toFixed(1)}%`);
+  }
+  return { fair: shin, method: 'shin', divergence: maxDivergence };
 }

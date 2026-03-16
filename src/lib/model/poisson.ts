@@ -18,6 +18,8 @@ export function poissonPmf(k: number, lam: number): number {
  * Returns array of P(X=0), P(X=1), ..., P(X=max).
  */
 export function poissonVector(lam: number, max: number): number[] {
+  // N-13: Validate non-negative lambda
+  if (lam < 0) throw new Error(`poissonVector: lambda must be non-negative, got ${lam}`);
   const v = new Array(max + 1);
   v[0] = Math.exp(-lam);
   for (let k = 1; k <= max; k++) v[k] = v[k - 1] * lam / k;
@@ -69,10 +71,11 @@ function applyDixonColesToGridInline(
 ): void {
   // Apply tau to (0,0), (1,0), (0,1), (1,1)
   if (grid.length > 1 && grid[0].length > 1) {
-    grid[0][0] *= 1 - homeLam * awayLam * rho;
-    grid[1][0] *= 1 + awayLam * rho;
-    grid[0][1] *= 1 + homeLam * rho;
-    grid[1][1] *= 1 - rho;
+    // N-7: Clamp Dixon-Coles corrections to prevent negative probabilities
+    grid[0][0] *= Math.max(0, 1 - homeLam * awayLam * rho);
+    grid[1][0] *= Math.max(0, 1 + awayLam * rho);
+    grid[0][1] *= Math.max(0, 1 + homeLam * rho);
+    grid[1][1] *= Math.max(0, 1 - rho);
   }
   // Renormalize
   const maxH = grid.length - 1;

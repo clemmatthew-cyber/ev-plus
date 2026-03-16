@@ -1,3 +1,4 @@
+// @ts-check
 // ─── Model Evaluation & Calibration Engine ───
 // Computes prediction accuracy metrics, calibration buckets, and daily trends.
 

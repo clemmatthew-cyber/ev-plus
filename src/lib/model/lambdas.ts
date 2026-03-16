@@ -99,8 +99,10 @@ function goalieMultiplier(
   // GSAx/60 relative to league average
   const delta = goalie.gsaxPer60 - lgAvgGsaxPer60;
 
+  // N-23: Scale goalie impact by sample size confidence (full confidence at 40 GP)
+  const confidence = Math.min(1, goalie.gamesPlayed / 40);
   // Convert to multiplier: positive delta (good goalie) → reduce opponent lambda
-  let mult = 1.0 - delta * cfg.goalieImpactScale;
+  let mult = 1.0 - delta * cfg.goalieImpactScale * confidence;
   return Math.max(cfg.goalieFloor, Math.min(cfg.goalieCeiling, mult));
 }
 
@@ -172,9 +174,13 @@ export function estimateMatchupLambdas(
   const lgPP = lg.ppPerGame || cfg.lgAvgPPPerGame;
   const lgPpXg = lg.ppXgPerGame || 0.5;
 
+  // N-5: penaltiesAgainst = penalties committed by opponents = this team's PP opportunities
   // Away team's penalty rate determines home PP opportunities (and vice versa)
-  const awayPenRate = away.all.penaltiesAgainst / gpA || lgPP;
-  const homePenRate = home.all.penaltiesAgainst / gpH || lgPP;
+  // N-8: Explicit check instead of || to avoid masking legitimate zero values
+  const rawAwayPenRate = away.all.penaltiesAgainst / gpA;
+  const awayPenRate = rawAwayPenRate > 0 ? rawAwayPenRate : lgPP;
+  const rawHomePenRate = home.all.penaltiesAgainst / gpH;
+  const homePenRate = rawHomePenRate > 0 ? rawHomePenRate : lgPP;
 
   const ppH = ppComponent(
     home.pp.xGoalsFor, away.pk.xGoalsAgainst,
@@ -191,8 +197,9 @@ export function estimateMatchupLambdas(
 
   // ── 3. Combine: EV + PP + other situations + home/away adjustment ──
   // otherSituationsPerTeam covers 4v4, 3v3, empty-net, shorthanded goals
-  let homeLam = ev5v5_h + ppH + cfg.otherSituationsPerTeam + cfg.homeIceAdvantage;
-  let awayLam = ev5v5_a + ppA + cfg.otherSituationsPerTeam - cfg.awayPenalty;
+  // N-4: Multiplicative home/away adjustment (better reflects proportional advantage)
+  let homeLam = (ev5v5_h + ppH + cfg.otherSituationsPerTeam) * (1 + cfg.homeIceAdvantage);
+  let awayLam = (ev5v5_a + ppA + cfg.otherSituationsPerTeam) * (1 - cfg.awayPenalty);
 
   // ── 4. Goalie adjustment ──
   const hasGoalieData = !!(

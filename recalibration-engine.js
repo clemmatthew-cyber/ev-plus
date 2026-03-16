@@ -1,3 +1,4 @@
+// @ts-check
 // ─── Adaptive Parameter Tuning & Weekly Self-Calibration Engine ───
 // Runs bounded parameter sweeps with walk-forward validation to tune model params.
 

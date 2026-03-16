@@ -1,3 +1,4 @@
+// @ts-check
 // ─── Betting Alert Engine ───
 // Detects high-confidence EV opportunities from market conditions,
 // goalie confirmations, and sharp-book intelligence.

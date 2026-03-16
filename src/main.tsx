@@ -1,5 +1,9 @@
+import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
-createRoot(document.getElementById("root")!).render(<App />);
+// F-21: StrictMode for development warnings
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode><App /></React.StrictMode>
+);

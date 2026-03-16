@@ -5,12 +5,13 @@
 // NBA  → pure devig model (odds-only, consensus fair prob)
 
 import type { EvBet } from "./types";
-import { fetchNhlOdds } from "./odds";
+import { fetchOdds } from "./odds";
 import { fetchTeamStats, fetchGoalieStats, leagueAverages, leagueAvg } from "./stats";
 import { generateEvBets, DEFAULT_CONFIG, generateNbaEvBets, type ModelConfig } from "./model";
 import { NCAAB_CONFIG } from "./model/ncaab-config";
 import { generateNcaabEvBets } from "./model/ncaab-engine";
 import { fetchTorvikStats } from "./stats/torvik";
+import { clearTeamLastGameTime } from "./model/tournament";
 import { MMA_CONFIG } from "./model/mma-config";
 import { generateMmaEvBets } from "./model/mma-engine";
 import { fetchUfcStats, enrichFighterDetails } from "./stats/ufcstats";
@@ -37,7 +38,9 @@ async function saveGames(games: { id: string; commenceTime: string; homeTeam: st
         })),
       }),
     });
-  } catch {}
+  } catch (err) {
+    console.error('[Engine] saveGames failed:', err);  // C-22
+  }
 }
 
 /** Fire-and-forget: persist model results snapshot to server */
@@ -83,7 +86,7 @@ export async function runPipeline(
     : DEFAULT_CONFIG;
 
   // ── Fetch odds (works for all sports) ──
-  const games = await fetchNhlOdds(sport);
+  const games = await fetchOdds(sport);
   if (!games.length) return [];
 
   // Upsert all games into SQLite (satisfies odds_history FK) — await to avoid race
@@ -95,6 +98,8 @@ export async function runPipeline(
     bets = await runNhlPipeline(games, config);
   } else if (sport === "ncaab") {
     // NCAAB → Torvik statistical model + devig, with graceful fallback
+    // NC-17: Clear per-team game time cache between pipeline runs
+    clearTeamLastGameTime();
     let torvikStats: Map<string, import("./stats/torvik").TorvikStats> | null = null;
     try {
       torvikStats = await fetchTorvikStats();
@@ -121,7 +126,12 @@ export async function runPipeline(
       }
     }
 
-    bets = generateMmaEvBets(games, { ...config, ...MMA_CONFIG }, fighterStats);
+    try {
+      bets = generateMmaEvBets(games, { ...config, ...MMA_CONFIG }, fighterStats);
+    } catch (err) {
+      console.error('[Engine] MMA pipeline failed:', err);  // M-10
+      bets = [];
+    }
   } else {
     // NBA and any future sport → devig model
     bets = generateNbaEvBets(games, config);
@@ -137,7 +147,7 @@ export async function runPipeline(
  * NHL-specific pipeline: fetch MoneyPuck stats + goalies, run Poisson model.
  */
 async function runNhlPipeline(
-  games: Awaited<ReturnType<typeof fetchNhlOdds>>,
+  games: Awaited<ReturnType<typeof fetchOdds>>,
   config: ModelConfig,
 ): Promise<EvBet[]> {
   const [stats, goalies, recentGames] = await Promise.all([

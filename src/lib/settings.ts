@@ -49,13 +49,31 @@ export async function updateBankroll(balance: number): Promise<{ balance: number
   return { balance, peakBalance: balance };
 }
 
-export async function loadSettings(): Promise<Settings> {
-  const br = await fetchBankroll();
-  return { ...DEFAULT_SETTINGS, bankroll: br.balance, peakBankroll: br.peakBalance };
+// F-9: localStorage persistence for sport/oddsFormat preferences
+const SETTINGS_KEY = 'ev-plus-settings';
+
+function loadPersistedSettings(): Partial<Settings> {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
 }
 
-export async function saveSettings(_s: Settings): Promise<void> {
-  // Settings live in React state; no persistence needed
+export async function loadSettings(): Promise<Settings> {
+  const br = await fetchBankroll();
+  const persisted = loadPersistedSettings();
+  return {
+    ...DEFAULT_SETTINGS,
+    ...persisted,
+    bankroll: br.balance,
+    peakBankroll: br.peakBalance,
+  };
+}
+
+export async function saveSettings(s: Settings): Promise<void> {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ sport: s.sport, oddsFormat: s.oddsFormat }));
+  } catch {}
 }
 
 export const SettingsContext = createContext<SettingsCtx>({

@@ -60,7 +60,9 @@ export function computeStake(
   const adjKelly = adjustedKellyFraction(cfg);
   const gradeMult = cfg.gradeMultiplier[grade];
 
-  const fraction = rk * adjKelly * gradeMult;
+  // C-27: Hard cap at 5% of bankroll to prevent catastrophic bets
+  const MAX_FRACTION = 0.05;
+  const fraction = Math.min(rk * adjKelly * gradeMult, MAX_FRACTION);
   if (fraction <= 0 || gradeMult === 0) {
     return { kellyFraction: fraction, stake: 0 };
   }

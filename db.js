@@ -1,3 +1,4 @@
+// @ts-check
 // ─── SQLite Database Layer for EV+ ───
 // Synchronous via better-sqlite3. All CRUD helpers exported for use in server.js.
 
@@ -853,6 +854,15 @@ export function getOddsHistory(gameId) {
 
 // -- Bets --
 
+// B-9: Efficient query for unevaluated resolved bets (avoids N+1 pattern)
+export function getUnevaluatedResolvedBets() {
+  return db.prepare(`
+    SELECT b.* FROM bets b
+    LEFT JOIN prediction_evaluations pe ON pe.bet_id = b.id
+    WHERE b.result IS NOT NULL AND b.result != 'pending' AND pe.id IS NULL
+  `).all();
+}
+
 export function getAllBets() {
   return stmts.getAllBets.all();
 }
@@ -1070,6 +1080,13 @@ export function americanToImplied(odds) {
 // -- Safe schema migration --
 
 function columnExists(table, column) {
+  // B-26: Whitelist to prevent SQL injection via string interpolation
+  const validTables = ['bets', 'games', 'odds_history', 'model_results', 'market_consensus',
+    'goalie_confirmations', 'betting_alerts', 'calibration_buckets', 'prediction_evaluations',
+    'sportsbook_metrics', 'model_params', 'recalibration_runs'];
+  if (!validTables.includes(table)) {
+    throw new Error(`columnExists: invalid table name "${table}"`);
+  }
   const cols = db.pragma(`table_info(${table})`);
   return cols.some(c => c.name === column);
 }
@@ -1193,3 +1210,20 @@ export function getParameterHistoryByKey(key, limit = 20) {
 export function close() {
   db.close();
 }
+
+// B-19: Data Retention
+const cleanupOldOddsHistory = db.prepare("DELETE FROM odds_history WHERE snapshot_at < datetime('now', '-90 days')");
+const cleanupOldModelResults = db.prepare("DELETE FROM model_results WHERE snapshot_at < datetime('now', '-90 days')");
+
+export function runDataRetention() {
+  try {
+    const oh = cleanupOldOddsHistory.run();
+    const mr = cleanupOldModelResults.run();
+    console.log(`[DB] Data retention: removed ${oh.changes} odds_history, ${mr.changes} model_results rows older than 90 days`);
+  } catch (err) {
+    console.error('[DB] Data retention failed:', err.message);
+  }
+}
+
+// B-31: Index for alert queries
+db.exec("CREATE INDEX IF NOT EXISTS idx_alerts_type_created ON betting_alerts(alert_type, created_at DESC)");

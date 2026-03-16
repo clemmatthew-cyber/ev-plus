@@ -27,7 +27,7 @@ export const TOURNAMENT_CONFIG = {
   tempoMismatchTotalAdjustment: -1.5, // points off projected total when significant mismatch
 
   // Short turnaround
-  shortTurnaroundSpreadPenalty: 1.0,  // points added to spread for fatigued team
+  // NC-10/19: shortTurnaroundSpreadPenalty removed (unused)
   shortTurnaroundPenalty: 1.5,        // points deducted for back-to-back (<24h)
 
   // Sigma adjustment for tournament uncertainty

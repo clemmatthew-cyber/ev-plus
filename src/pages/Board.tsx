@@ -70,17 +70,20 @@ export default function Board() {
     return () => clearInterval(interval);
   }, [refresh]);
 
+  // F-15: Error handling for bet placement
   const togglePlaced = async (id: string) => {
     const bet = bets.find(b => b.id === id);
     if (!bet) return;
-
-    if (bet.placed) {
-      await unplaceBet(bet.gameId, bet.outcome, bet.bestBook);
-    } else {
-      await placeBet(bet);
+    try {
+      if (bet.placed) {
+        await unplaceBet(bet.gameId, bet.outcome, bet.bestBook);
+      } else {
+        await placeBet(bet);
+      }
+      setBets(prev => prev.map(b => b.id === id ? { ...b, placed: !b.placed } : b));
+    } catch (err) {
+      console.error('[Board] togglePlaced failed:', err);
     }
-
-    setBets(prev => prev.map(b => b.id === id ? { ...b, placed: !b.placed } : b));
   };
 
   // Extract unique game days from bets
@@ -98,15 +101,18 @@ export default function Board() {
     }));
   }, [bets]);
 
-  let filtered = bets;
-  if (dayFilter !== "all") filtered = filtered.filter(b => fmtDate(startOfDay(new Date(b.gameTime)), "yyyy-MM-dd") === dayFilter);
-  if (marketFilter !== "all") filtered = filtered.filter(b => b.market === marketFilter);
-  if (!showAll) filtered = filtered.filter(b => b.confidenceGrade === "A" || b.confidenceGrade === "B");
-  filtered = [...filtered].sort((a, b) => {
-    if (sortBy === "edge") return b.edge - a.edge;
-    if (sortBy === "confidence") return b.confidenceScore - a.confidenceScore;
-    return new Date(a.gameTime).getTime() - new Date(b.gameTime).getTime();
-  });
+  // F-6: Memoize filtered/sorted bets to avoid recreation on every render
+  const filtered = useMemo(() => {
+    let result = bets;
+    if (dayFilter !== "all") result = result.filter(b => fmtDate(startOfDay(new Date(b.gameTime)), "yyyy-MM-dd") === dayFilter);
+    if (marketFilter !== "all") result = result.filter(b => b.market === marketFilter);
+    if (!showAll) result = result.filter(b => b.confidenceGrade === "A" || b.confidenceGrade === "B");
+    return [...result].sort((a, b) => {
+      if (sortBy === "edge") return b.edge - a.edge;
+      if (sortBy === "confidence") return b.confidenceScore - a.confidenceScore;
+      return new Date(a.gameTime).getTime() - new Date(b.gameTime).getTime();
+    });
+  }, [bets, dayFilter, marketFilter, showAll, sortBy]);
 
   const plLabel = sport === "nhl" ? "PL" : "Sprd";  // NHL uses "PL" (puck line), all others use "Sprd"
   const filters: { key: MarketFilter; label: string }[] = [

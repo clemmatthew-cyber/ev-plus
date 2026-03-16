@@ -38,7 +38,7 @@ function saveTournamentSnapshot(gameId: string, snapshot: ReturnType<typeof buil
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ gameId, snapshot }),
-  }).catch(() => {});
+  }).catch((err) => console.warn('[NCAAB] saveTournamentSnapshot failed:', err.message));
 }
 
 /** Fire-and-forget: persist upset signal to server */
@@ -47,7 +47,7 @@ function saveUpsetSignal(gameId: string, data: Record<string, unknown>): void {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ gameId, data }),
-  }).catch(() => {});
+  }).catch((err) => console.warn('[NCAAB] saveUpsetSignal failed:', err.message));
 }
 
 /**
@@ -126,14 +126,14 @@ export function generateNcaabEvBets(
         if (isHomeUpset) {
           projection = {
             ...projection,
-            homeWinProb: Math.min(projection.homeWinProb + UPSET_CONFIG.winProbBoost, 0.50),
-            awayWinProb: Math.max(projection.awayWinProb - UPSET_CONFIG.winProbBoost, 0.50),
+            homeWinProb: projection.homeWinProb + UPSET_CONFIG.winProbBoost,  // NC-6: removed 0.50 cap
+            awayWinProb: projection.awayWinProb - UPSET_CONFIG.winProbBoost,
           };
         } else {
           projection = {
             ...projection,
-            awayWinProb: Math.min(projection.awayWinProb + UPSET_CONFIG.winProbBoost, 0.50),
-            homeWinProb: Math.max(projection.homeWinProb - UPSET_CONFIG.winProbBoost, 0.50),
+            awayWinProb: projection.awayWinProb + UPSET_CONFIG.winProbBoost,  // NC-6: removed 0.50 cap
+            homeWinProb: projection.homeWinProb - UPSET_CONFIG.winProbBoost,
           };
         }
       }
@@ -388,7 +388,7 @@ function getModelProbForOutcome(
   if (market === "totals" && outcomePoint != null) {
     const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma * sigmaMultiplier;
     const projTotal = projection.projectedTotal;
-    const totalSigma = sigma * 1.2;
+    const totalSigma = NCAAB_CONFIG.ncaabModel.totalsSigma;  // NC-8: dedicated totals sigma
 
     if (outcomeName === "Over") {
       return 1 - normalCDF((outcomePoint - projTotal) / totalSigma);

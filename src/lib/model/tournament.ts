@@ -23,13 +23,16 @@ export interface TournamentContext {
     home: boolean;
     away: boolean;
   };
-  homePriorTournamentGame: boolean;
-  awayPriorTournamentGame: boolean;
   publicBiasTeam: string | null;    // which team (if any) is the "public" side
 }
 
 // ── In-memory per-team last-game-time cache for short turnaround detection ──
 const teamLastGameTime = new Map<string, Date>();
+
+/** NC-17: Clear per-team game time cache between pipeline runs */
+export function clearTeamLastGameTime(): void {
+  teamLastGameTime.clear();
+}
 
 /** Record a game time for both teams (call as games are processed). */
 export function recordTeamGameTime(homeTeam: string, awayTeam: string, gameTime: Date): void {
@@ -98,7 +101,6 @@ export function detectTournamentContext(
   homeStats: TorvikStats | null,
   awayStats: TorvikStats | null,
   allStats?: Map<string, TorvikStats>,
-  recentTournamentGameIds?: Set<string>,
 ): TournamentContext {
   const gameDate = new Date(game.commenceTime);
   const month = gameDate.getMonth(); // 0-indexed
@@ -125,8 +127,6 @@ export function detectTournamentContext(
       awayConference: null,
       isCrossConference: false,
       shortTurnaround: { home: false, away: false },
-      homePriorTournamentGame: false,
-      awayPriorTournamentGame: false,
       publicBiasTeam: null,
     };
   }
@@ -156,8 +156,7 @@ export function detectTournamentContext(
     recordTeamGameTime(homeStats.team, awayStats.team, gameDate);
   }
 
-  const homePriorTournamentGame = false;
-  const awayPriorTournamentGame = false;
+
 
   // Public bias detection
   const publicBiasTeam = homeStats && awayStats && allStats
@@ -181,8 +180,7 @@ export function detectTournamentContext(
     awayConference: null,
     isCrossConference,
     shortTurnaround: { home: homeShort, away: awayShort },
-    homePriorTournamentGame,
-    awayPriorTournamentGame,
+
     publicBiasTeam,
   };
 }

@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
 import Board from "./pages/Board";
 import Tracker from "./pages/Tracker";
-import Bankroll from "./pages/Bankroll";
+// F-24: Lazy-load heavy pages (Bankroll uses Recharts)
+const Bankroll = React.lazy(() => import("./pages/Bankroll"));
 import Analytics from "./pages/Analytics";
 import AlertBadge from "./components/AlertBadge";
 import {
@@ -49,13 +50,18 @@ export default function App() {
     });
   }, []);
 
+  // F-14: Error handling for bankroll updates
   const setBankroll = useCallback(async (b: number) => {
-    const result = await updateBankroll(b);
-    setSettings(prev => ({
-      ...prev,
-      bankroll: result.balance,
-      peakBankroll: result.peakBalance,
-    }));
+    try {
+      const result = await updateBankroll(b);
+      setSettings(prev => ({
+        ...prev,
+        bankroll: result.balance,
+        peakBankroll: result.peakBalance,
+      }));
+    } catch (err) {
+      console.error('[App] setBankroll failed:', err);
+    }
   }, []);
 
   const ctxValue = { ...settings, setSport, setOddsFormat, setBankroll };
@@ -150,7 +156,7 @@ export default function App() {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto">
-          {tab === "board" ? <Board /> : tab === "tracker" ? <Tracker /> : tab === "bankroll" ? <Bankroll /> : <Analytics />}
+          {tab === "board" ? <Board /> : tab === "tracker" ? <Tracker /> : tab === "bankroll" ? <Suspense fallback={<div className="flex items-center justify-center h-32 text-[#737373] text-sm">Loading...</div>}><Bankroll /></Suspense> : <Analytics />}
         </main>
 
         {/* Safe area bottom */}

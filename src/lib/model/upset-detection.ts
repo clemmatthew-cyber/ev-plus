@@ -27,7 +27,7 @@ export interface UpsetDetectionResult {
   defensiveMismatch: number;          // opponent_adjOE - team_adjDE (higher = more mismatch)
   upsetSignal: boolean;               // true when all 4 conditions met
   adjustedModelProb: number;          // win prob after upset adjustment
-  adjustedSpreadCoverProb: number;    // spread cover prob after upset adjustment
+  // NC-24: adjustedSpreadCoverProb removed (always 0)
   upsetTeam: string | null;           // which team triggers the signal (null if no signal)
   upsetDetails: {
     adjDERank: number | null;
@@ -123,7 +123,6 @@ export function detectDefensiveUpset(
     defensiveMismatch: Math.round(primaryMismatch * 100) / 100,
     upsetSignal: false,
     adjustedModelProb: homeIsUnderdog ? homeWinProb : awayWinProb,
-    adjustedSpreadCoverProb: 0,
     upsetTeam: null,
     upsetDetails: null,
   };

@@ -118,17 +118,19 @@ export interface ModelConfig {
 
   // ─── Lineup Adjustment ───
   lineupAdjustmentEnabled: boolean;
-  lineupIncompleteConfidencePenalty: number;  // confidence penalty when lineup data incomplete
+  lineupIncompleteConfidencePenalty: number;
 
   // ─── Depth Score ───
-  depthDivisor?: number;  // games-played divisor for depth score (default 60)
+  depthDivisor?: number;            // games-played divisor (default 60)
+  simMaxScore?: number;             // N-24: max goals per side in simulation (default 15)
+  simSpreadLines?: number[];        // N-18: spread lines for simulation
 }
 
 export const DEFAULT_CONFIG: ModelConfig = {
   bankroll: 3000,
   peakBankroll: 3000,
   minStake: 10,
-  maxStake: Infinity,
+  maxStake: 500,  // C-4: reasonable default
 
   minEdge: {
     ml: 0.03,
@@ -150,8 +152,8 @@ export const DEFAULT_CONFIG: ModelConfig = {
     D: 0.0,
   },
 
-  homeIceAdvantage: 0.12,
-  awayPenalty: 0.04,
+  homeIceAdvantage: 0.04,  // N-4: retuned for multiplicative application
+  awayPenalty: 0.013,  // N-4: retuned for multiplicative application
   xgWeight: 0.70,
   hdFinishingCredit: 0.15,
 
@@ -195,8 +197,10 @@ export const DEFAULT_CONFIG: ModelConfig = {
   lambdaMax: 5.5,
 
   // Monte Carlo
-  simCount: 50000,
-  otHomeAdvantage: 0.53,
+  simCount: 100000,  // N-21: increased for better precision
+  otHomeAdvantage: 0.53,  // N-22: NHL OT home win rate ~0.52-0.54 historically
+  simMaxScore: 15,                  // N-24: max goals per side in simulation
+  simSpreadLines: [-1.5, 1.5, -2.5, 2.5],  // N-18: spread lines for simulation
 
   // Dixon-Coles
   dixonColesRho: -0.04,

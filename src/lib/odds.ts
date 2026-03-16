@@ -69,7 +69,15 @@ async function tryFetchOdds(sport: string): Promise<GameOdds[] | null> {
   return null;
 }
 
-export async function fetchNhlOdds(sport = "nhl"): Promise<GameOdds[]> {
+// M-6: Sport-specific market optimization
+const SPORT_MARKETS: Record<string, string> = {
+  mma: 'h2h',
+  nhl: 'h2h,spreads,totals',
+  nba: 'h2h,spreads,totals',
+  ncaab: 'h2h,spreads,totals',
+};
+
+export async function fetchOdds(sport = "nhl"): Promise<GameOdds[]> {
   // Retry up to 4 times with backoff — handles Railway cold starts (~10-15s)
   const delays = [0, 3000, 5000, 7000];
   for (const delay of delays) {
@@ -188,4 +196,11 @@ const ABBREVS: Record<string, string> = {
   "Portland Trail Blazers":"POR","Sacramento Kings":"SAC","San Antonio Spurs":"SAS",
   "Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS",
 };
-export const teamAbbrev = (name: string) => ABBREVS[name] || name.split(" ").pop()?.toUpperCase().slice(0, 3) || "???";
+// M-7: Sport-aware team abbreviation (MMA uses last name)
+export const teamAbbrev = (name: string, _sport?: string) => {
+  if (_sport === 'mma') {
+    const parts = name.split(' ');
+    return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : name.toUpperCase();
+  }
+  return ABBREVS[name] || name.split(" ").pop()?.toUpperCase().slice(0, 3) || "???";
+};

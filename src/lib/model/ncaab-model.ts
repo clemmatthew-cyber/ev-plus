@@ -54,7 +54,12 @@ export function computeNcaabProjection(
   isNeutralSite = false,
 ): NcaabProjection {
   const modelParams = NCAAB_CONFIG.ncaabModel;
-  const avgEff = leagueAvgEfficiency;
+  // NC-28: Guard against NaN/Infinity from invalid league average
+  let avgEff = leagueAvgEfficiency;
+  if (!avgEff || avgEff <= 0 || !isFinite(avgEff)) {
+    console.warn('[NCAAB] Invalid leagueAvgEfficiency:', avgEff);
+    avgEff = 109.0; // safe default
+  }
 
   const gameTempo = (homeStats.tempo + awayStats.tempo) / 2;
 
@@ -87,17 +92,3 @@ export function computeNcaabProjection(
   };
 }
 
-/**
- * Get the model win probability for a specific team in a matchup.
- * Returns the probability that `teamName` wins.
- */
-export function getTeamWinProb(
-  teamName: string,
-  homeTeam: string,
-  homeStats: TorvikStats,
-  awayStats: TorvikStats,
-  isNeutralSite = false,
-): number {
-  const proj = computeNcaabProjection(homeStats, awayStats, isNeutralSite);
-  return teamName === homeTeam ? proj.homeWinProb : proj.awayWinProb;
-}

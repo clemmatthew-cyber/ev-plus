@@ -75,7 +75,7 @@ export async function isBetTracked(gameId: string, outcome: string, book: string
 
 export async function updateBet(id: string, patch: Partial<TrackedBet>): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/api/bets/${id}`, {
+    const res = await fetch(`${API_BASE}/api/bets/${encodeURIComponent(id)}`, {  // C-25
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
@@ -103,7 +103,7 @@ export async function bulkUpdate(updates: { id: string; patch: Partial<TrackedBe
 
 export async function deleteBet(id: string): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/api/bets/${id}`, { method: "DELETE" });
+    const res = await fetch(`${API_BASE}/api/bets/${encodeURIComponent(id)}`, { method: "DELETE" });  // C-25
     if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
   } catch (err) {
     console.error('[store]', err);

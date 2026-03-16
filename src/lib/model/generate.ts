@@ -159,7 +159,8 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
           sim.homeWinProb <= 0 || sim.awayWinProb <= 0) {
         sim = null;
       }
-    } catch {
+    } catch (e) {
+      console.warn(`[Model] Simulation failed for ${hA} vs ${aA}:`, e instanceof Error ? e.message : e);  // N-20
       sim = null;
     }
 
@@ -253,7 +254,7 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     const lines = new Set<number>();
     for (const bk of game.bookmakers)
       for (const m of bk.markets)
-        if (m.key === "totals") for (const o of m.outcomes) if (o.point) lines.add(o.point);
+        if (m.key === "totals") for (const o of m.outcomes) if (o.point != null) lines.add(Math.round(o.point * 10) / 10);  // C-31: round floats before dedup
 
     for (const line of lines) {
       for (const [name, isOver] of [["Over", true], ["Under", false]] as [string, boolean][]) {

@@ -131,7 +131,12 @@ function calcCLV(oddsAtPick: number, closingOdds: number): number {
 
 // ─── Main resolver: resolve all pending bets ───
 
-export async function resolveAllPending(): Promise<number> {
+export async function resolveAllPending(sport = 'nhl'): Promise<number> {
+  // C-19: Resolver is NHL-only — skip for other sports
+  if (sport !== 'nhl') {
+    console.warn(`[Resolver] Auto-resolution not available for ${sport}`);
+    return 0;
+  }
   const bets = await getAllBets();
   const pending = bets.filter(b => b.result === "pending");
   if (pending.length === 0) return 0;

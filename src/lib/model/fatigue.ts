@@ -100,11 +100,11 @@ export function computeFatigueAdjustment(
 
   if (homeRest !== Infinity && awayRest !== Infinity) {
     const restDiff = Math.floor(homeRest) - Math.floor(awayRest);
-    if (restDiff >= 2) {
+    if (restDiff >= 1) {  // N-3: lowered from 2 to capture 1-day rest advantage
       const bonus = Math.min(1 + restDiff * cfg.restBonusPerDay, cfg.maxRestBonus);
       homeFactor *= bonus;
       reasons.push(`${homeTeam} rest advantage: ${restDiff}d (×${bonus.toFixed(3)})`);
-    } else if (restDiff <= -2) {
+    } else if (restDiff <= -1) {  // N-3: lowered from -2
       const bonus = Math.min(1 + Math.abs(restDiff) * cfg.restBonusPerDay, cfg.maxRestBonus);
       awayFactor *= bonus;
       reasons.push(`${awayTeam} rest advantage: ${Math.abs(restDiff)}d (×${bonus.toFixed(3)})`);

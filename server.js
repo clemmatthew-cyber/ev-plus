@@ -1,3 +1,4 @@
+// @ts-check
 // ─── NHL EV+ Backend Proxy ───
 // Keeps API key server-side, proxies MoneyPuck (CORS), caches both for 3 min.
 // SQLite persistence via better-sqlite3 (db.js).
@@ -12,6 +13,7 @@ import * as evaluation from "./evaluation.js";
 import * as sportsbook from "./sportsbook-intelligence.js";
 import { runAlertEngine } from "./alert-engine.js";
 import { runRecalibration, getActiveModelConfig } from "./recalibration-engine.js";
+import rateLimit from "express-rate-limit";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,11 +31,17 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "a03c63d84fa0e5dd7141a9b0b389b6
 
 // ─── CORS (allow external frontends) ───
 
-app.use(cors());
+// B-27/F-17: Restrict CORS origins
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : ['http://localhost:5173', 'http://localhost:5000'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+}));
 
 // ─── JSON body parsing (must be before route handlers) ───
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));  // B-23: body size limit
 
 // ─── API key auth for mutation endpoints ───
 
@@ -52,6 +60,18 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'GET') return next();
   return authMiddleware(req, res, next);
 });
+
+// ─── Rate Limiting (B-29/F-18) ───
+const apiLimiter = rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false });
+app.use('/api', apiLimiter);
+const heavyLimiter = rateLimit({ windowMs: 60_000, max: 3, standardHeaders: true, legacyHeaders: false });
+
+// ─── Endpoint Cooldowns (F-3) ───
+let lastEvalRunTs = 0;
+let lastEvalResult = null;
+let lastSportsbookRunTs = 0;
+let lastSportsbookResult = null;
+const COOLDOWN_MS = 5 * 60_000;
 
 // ─── Cache ───
 
@@ -115,6 +135,11 @@ app.get("/api/odds", async (req, res) => {
     const data = await upstream.json();
 
     oddsCache.set(sportKey, { data, ts: Date.now() });
+    // B-13: Evict oldest cache entry when cache grows too large
+    if (oddsCache.size > 20) {
+      const oldest = [...oddsCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) oddsCache.delete(oldest[0]);
+    }
 
     res.setHeader("X-Cache", "MISS");
     res.json(data);
@@ -231,9 +256,13 @@ app.get("/api/scores/:date", async (req, res) => {
     scoresCache.set(date, { data, ts: Date.now() });
 
     // Evict old cache entries (keep last 7 days)
+    // B-36: Evict by timestamp instead of key sort
     if (scoresCache.size > 14) {
-      const oldest = [...scoresCache.keys()].sort()[0];
-      scoresCache.delete(oldest);
+      let oldestKey = null, oldestTs = Infinity;
+      for (const [k, v] of scoresCache) {
+        if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+      }
+      if (oldestKey) scoresCache.delete(oldestKey);
     }
 
     res.setHeader("X-Cache", "MISS");
@@ -320,6 +349,15 @@ app.get("/api/bets", (_req, res) => {
 
 app.post("/api/bets", (req, res) => {
   const b = req.body;
+  // B-22: Input validation
+  const required = ['gameId', 'outcome', 'bestBook', 'oddsAtPick', 'modelProb'];
+  const missing = required.filter(f => b[f] == null);
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
+  }
+  if (typeof b.oddsAtPick !== 'number' || typeof b.modelProb !== 'number') {
+    return res.status(400).json({ error: 'oddsAtPick and modelProb must be numbers' });
+  }
   // Duplicate check
   const existing = db.getBetByKey(b.gameId, b.outcome, b.bestBook);
   if (existing) {
@@ -1307,6 +1345,9 @@ app.get("/api/mma/fighters", async (req, res) => {
   }
 });
 
+// ─── Health Check (C-29) ───
+app.get('/api/health', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
+
 // ─── Static files (React dist) ───
 
 app.use(express.static(join(__dirname, "dist")));
@@ -1316,7 +1357,7 @@ app.get("/{*splat}", (_req, res) => {
 
 // ─── Start ───
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[server] NHL EV+ running on http://localhost:${PORT} (SQLite persistence)`);
 });
 
@@ -1342,4 +1383,18 @@ function maybeRunWeeklyRecalibration() {
 }
 
 setTimeout(maybeRunWeeklyRecalibration, 30000);
-setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000);
+// B-35: Check hourly instead of daily for more reliable scheduling
+setInterval(maybeRunWeeklyRecalibration, 60 * 60 * 1000);
+
+// ─── Graceful Shutdown (B-34) ───
+function gracefulShutdown(signal) {
+  console.log(`[Server] ${signal} received, shutting down gracefully...`);
+  server.close(() => {
+    try { db.close(); } catch {}
+    console.log('[Server] Closed.');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10000);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

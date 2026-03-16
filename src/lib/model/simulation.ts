@@ -22,6 +22,13 @@ export interface SimulationResult {
 
 /** Poisson random variate via inverse CDF method. */
 function poissonSample(lam: number): number {
+  if (lam <= 0) return 0;
+  // N-1: Normal approximation for very large lambda (avoids exp(-lam) underflow)
+  if (lam > 500) {
+    const u1 = Math.random(), u2 = Math.random();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return Math.max(0, Math.round(lam + Math.sqrt(lam) * z));
+  }
   const L = Math.exp(-lam);
   let k = 0;
   let p = 1;
@@ -41,10 +48,15 @@ export function simulateGame(
   awayLam: number,
   cfg: SimConfig,
 ): SimulationResult {
+  // N-19: Validate simulation inputs
+  if (cfg.simCount <= 0) throw new Error('simulateGame: simCount must be positive');
+  if (cfg.otHomeAdvantage < 0 || cfg.otHomeAdvantage > 1) {
+    throw new Error('simulateGame: otHomeAdvantage must be in [0,1]');
+  }
   const { simCount, otHomeAdvantage, dixonColesRho: rho } = cfg;
 
-  // Pre-allocate score distribution (up to 15 goals per side)
-  const maxScore = 15;
+  // Pre-allocate score distribution (N-24: configurable max score)
+  const maxScore = cfg.simMaxScore ?? 15;
   const scoreDist: number[][] = [];
   for (let h = 0; h <= maxScore; h++) {
     scoreDist[h] = new Array(maxScore + 1).fill(0);
@@ -56,8 +68,8 @@ export function simulateGame(
   let drawRegWeight = 0;
   let totalWeight = 0;
 
-  // Spread tracking: common NHL spreads
-  const spreadLines = [-1.5, 1.5, -2.5, 2.5];
+  // Spread tracking (N-18: configurable spread lines)
+  const spreadLines = cfg.simSpreadLines ?? [-1.5, 1.5, -2.5, 2.5];
   const spreadCounts = new Map<number, { homeCovers: number; awayCovers: number }>();
   for (const s of spreadLines) {
     spreadCounts.set(s, { homeCovers: 0, awayCovers: 0 });
@@ -88,7 +100,9 @@ export function simulateGame(
       totalGoalsDist[totalGoals] += tau;
     }
 
-    // Determine winner (regulation + OT/SO)
+    // N-2: NHL moneyline includes OT — homeWinProb + awayWinProb intentionally sums > 1.0
+    // Each represents the probability of that team ultimately winning (reg or OT)
+    // drawRegProb tracks regulation draws separately for puckline/period markets
     if (hGoals > aGoals) {
       homeWinWeight += tau;
     } else if (aGoals > hGoals) {
@@ -122,7 +136,8 @@ export function simulateGame(
     for (const line of totalLines) {
       const entry = totalCounts.get(line)!;
       if (totalGoals > line) entry.over += tau;
-      if (totalGoals < line) entry.under += tau;
+      else if (totalGoals < line) entry.under += tau;
+      // N-25: push on exact total tracked implicitly (neither over nor under incremented)
     }
   }
 
