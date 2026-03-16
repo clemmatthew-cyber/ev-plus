@@ -23,19 +23,8 @@ export interface GameOdds {
 /** Power devig — re-exported from model for backwards compat */
 export const devigPower = shinDevig;
 
-const SPORT_KEYS: Record<string, string> = {
-  nhl: "icehockey_nhl",
-  nba: "basketball_nba",
-  ncaab: "basketball_ncaab",
-  mma: "mma_mixed_martial_arts",
-};
-
-const ODDS_API_KEY = "a03c63d84fa0e5dd7141a9b0b389b6bf";
-
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const PROXY_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
-
-const BOOKS = "draftkings,fanduel,betmgm,caesars,pointsbetus,fanatics";
 
 function parseGameOdds(raw: any[]): GameOdds[] {
   return raw.map((g) => ({
@@ -61,8 +50,8 @@ function parseGameOdds(raw: any[]): GameOdds[] {
 /** Sleep helper */
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-/** Try a single fetch attempt across all sources */
-async function tryFetchOdds(sport: string, sportKey: string): Promise<GameOdds[] | null> {
+/** Try a single fetch attempt via backend proxy */
+async function tryFetchOdds(sport: string): Promise<GameOdds[] | null> {
   // 1. Backend proxy first (works in deployed iframe where cross-origin is blocked)
   if (PROXY_BASE) {
     try {
@@ -77,30 +66,15 @@ async function tryFetchOdds(sport: string, sportKey: string): Promise<GameOdds[]
     if (res.ok) return parseGameOdds(await res.json());
   } catch { /* ignore */ }
 
-  // 3. Direct Odds API (works in normal browsers with CORS)
-  try {
-    const url =
-      `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/` +
-      `?apiKey=${ODDS_API_KEY}` +
-      `&regions=us` +
-      `&markets=h2h,spreads,totals` +
-      `&oddsFormat=american` +
-      `&bookmakers=${BOOKS}`;
-    const res = await fetch(url);
-    if (res.ok) return parseGameOdds(await res.json());
-  } catch { /* CORS blocked or network error */ }
-
   return null;
 }
 
 export async function fetchNhlOdds(sport = "nhl"): Promise<GameOdds[]> {
-  const sportKey = SPORT_KEYS[sport] || SPORT_KEYS.nhl;
-
   // Retry up to 4 times with backoff — handles Railway cold starts (~10-15s)
   const delays = [0, 3000, 5000, 7000];
   for (const delay of delays) {
     if (delay > 0) await sleep(delay);
-    const result = await tryFetchOdds(sport, sportKey);
+    const result = await tryFetchOdds(sport);
     if (result) return result;
   }
 
@@ -137,9 +111,38 @@ export function findBestLine(
   }
   if (bestPrice === -Infinity) return null;
 
-  // De-vig using Shin/power method from model
-  const rawProbs = bestAllOutcomes.map(o => americanToImplied(o.price));
-  const fairProbs = shinDevig(rawProbs);
+  // Build consensus fair probabilities from median implied probs across all books
+  // 1. Collect all unique outcome keys from the best book's market (to define outcome order)
+  const outcomeKeys = bestAllOutcomes.map(o =>
+    marketKey === "h2h" ? o.name : `${o.name}|${o.point}`
+  );
+
+  // 2. For each outcome, gather implied probs from every book offering that outcome
+  const impliedProbsByOutcome: number[][] = outcomeKeys.map(() => []);
+  for (const bk of game.bookmakers) {
+    const market = bk.markets.find(m => m.key === marketKey);
+    if (!market) continue;
+    for (let i = 0; i < outcomeKeys.length; i++) {
+      const ref = bestAllOutcomes[i];
+      const match = marketKey === "h2h"
+        ? market.outcomes.find(o => o.name === ref.name)
+        : market.outcomes.find(o => o.name === ref.name && o.point === ref.point);
+      if (match) {
+        impliedProbsByOutcome[i].push(americanToImplied(match.price));
+      }
+    }
+  }
+
+  // 3. Compute median implied prob for each outcome
+  const medianProbs = impliedProbsByOutcome.map(probs => {
+    if (probs.length === 0) return americanToImplied(bestAllOutcomes[0].price);
+    probs.sort((a, b) => a - b);
+    const mid = Math.floor(probs.length / 2);
+    return probs.length % 2 === 1 ? probs[mid] : (probs[mid - 1] + probs[mid]) / 2;
+  });
+
+  // 4. Shin devig the consensus median probabilities
+  const fairProbs = shinDevig(medianProbs);
   const idx = marketKey === "h2h"
     ? bestAllOutcomes.findIndex(o => o.name === outcomeName)
     : bestAllOutcomes.findIndex(o => o.name === outcomeName && o.point === outcomePoint);

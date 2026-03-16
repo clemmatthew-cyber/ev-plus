@@ -22,14 +22,18 @@ export const NCAAB_CONFIG = {
     seasonGamesPlayed: 33,       // typical NCAAB regular season length
   },
 
+  // ─── Depth Score ───
+  depthDivisor: 35,  // NCAAB teams play ~33 games (not 60/82 like NBA/NHL)
+
   // ─── Confidence Weight Overrides for NCAAB ───
+  // Weights must sum to 1.0. Redistributed proportionally from original 0.85 total.
   confidence: {
-    edgeWeight: 0.25,        // keep — edge magnitude matters
-    agreementWeight: 0.20,   // NOW MEANINGFUL — model vs devig agreement
-    depthWeight: 0.10,       // slightly lower — less data in NCAAB
-    bookWeight: 0.12,        // keep — more books = better
-    priceWeight: 0.08,       // keep — avoid extremes
+    edgeWeight: 0.29,        // keep heaviest — edge magnitude matters
+    agreementWeight: 0.24,   // model vs devig agreement
+    depthWeight: 0.12,       // slightly lower — less data in NCAAB
+    bookWeight: 0.14,        // more books = better
+    priceWeight: 0.09,       // avoid extremes
     goalieWeight: 0.00,      // ZERO — no goalies in basketball
-    sharpBookWeight: 0.10,   // keep — sportsbook intelligence
+    sharpBookWeight: 0.12,   // sportsbook intelligence
   },
 };

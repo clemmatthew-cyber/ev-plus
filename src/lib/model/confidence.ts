@@ -50,8 +50,9 @@ export function computeConfidence(
   //    single book deviating from consensus — that's a BETTER signal.
   const sharpnessScore = Math.min(100, nBooks * 25);
 
-  // 3. Data depth: 100 when both teams have 60+ games
-  const depthScore = Math.min(100, (Math.min(homeGP, awayGP) / 60) * 100);
+  // 3. Data depth: 100 when both teams have a full season of games
+  const depthDivisor = cfg.depthDivisor ?? 60;
+  const depthScore = Math.min(100, (Math.min(homeGP, awayGP) / depthDivisor) * 100);
 
   // 4. Book coverage: 100 when 4+ books have odds
   const bookScore = Math.min(100, (nBooks / 4) * 100);

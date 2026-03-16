@@ -105,12 +105,11 @@ function goalieMultiplier(
 }
 
 /**
- * Recency regression: pull extreme lambdas toward league average.
+ * Recency regression: pull small-sample lambdas toward league average.
  *
- * With only season aggregates (no per-game xG logs), we approximate
- * recency by regressing teams with many GP slightly toward the mean.
- * This prevents the model from overweighting early-season noise for
- * teams deep into the season.
+ * Teams with few games played have noisy data, so we regress them
+ * toward the league mean. The fewer games played, the stronger the
+ * regression. Teams at or above recencyMinGP are trusted as-is.
  */
 function applyRecencyRegression(
   lam: number,
@@ -118,9 +117,9 @@ function applyRecencyRegression(
   lgPerTeam: number,
   cfg: ModelConfig,
 ): number {
-  if (gp < cfg.recencyMinGP) return lam;
-  // Linear regression toward league avg
-  return lam * (1 - cfg.recencyRegression) + lgPerTeam * cfg.recencyRegression;
+  if (gp >= cfg.recencyMinGP) return lam; // enough games, trust the data
+  const regressionFactor = cfg.recencyRegression * (1 - gp / cfg.recencyMinGP);
+  return lam * (1 - regressionFactor) + lgPerTeam * regressionFactor;
 }
 
 /**

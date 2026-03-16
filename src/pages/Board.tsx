@@ -3,7 +3,7 @@ import type { EvBet, MarketFilter, SortBy, DayFilter } from "@/lib/types";
 import { format as fmtDate, startOfDay, isToday, isTomorrow } from "date-fns";
 import type { MovementDir } from "@/lib/movement";
 import { runPipeline } from "@/lib/engine";
-import { placeBet, unplaceBet, isBetTracked } from "@/lib/store";
+import { placeBet, unplaceBet, getAllBets } from "@/lib/store";
 import { recordSnapshot, getMovementMap } from "@/lib/movement";
 import { requestNotifPermission, seedNotified, notifyNewAGrades } from "@/lib/notify";
 import { useSettings } from "@/lib/settings";
@@ -27,13 +27,12 @@ export default function Board() {
 
   // Hydrate placed state from IndexedDB after pipeline loads
   const hydrateTracked = useCallback(async (evBets: EvBet[]) => {
-    const hydrated = await Promise.all(
-      evBets.map(async b => ({
-        ...b,
-        placed: await isBetTracked(b.gameId, b.outcome, b.bestBook),
-      }))
-    );
-    return hydrated;
+    const allTracked = await getAllBets();
+    const trackedKeys = new Set(allTracked.map(b => `${b.gameId}|${b.outcome}|${b.bestBook}`));
+    return evBets.map(b => ({
+      ...b,
+      placed: trackedKeys.has(`${b.gameId}|${b.outcome}|${b.bestBook}`),
+    }));
   }, []);
 
   const refresh = useCallback(async () => {
@@ -61,7 +60,7 @@ export default function Board() {
     } finally {
       setLoading(false);
     }
-  }, [hydrateTracked, sport]);
+  }, [hydrateTracked, sport, bankroll, peakBankroll]);
 
   useEffect(() => {
     setLoading(true);
@@ -157,6 +156,13 @@ export default function Board() {
           {lastSync && <span className="text-[10px] text-[#737373] font-mono hidden sm:block">sync {lastSync}</span>}
         </div>
       </div>
+
+      {/* MMA model limitation banner */}
+      {sport === "mma" && (
+        <div className="text-xs text-amber-400/80 bg-amber-400/10 px-3 py-1.5 rounded mb-0 text-center mx-4 mt-2">
+          MMA: Market devig model only — fighter statistical model coming soon
+        </div>
+      )}
 
       {/* Column header */}
       <div className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-medium text-[#737373] uppercase tracking-wider border-b border-white/[0.03] sm:gap-3 sm:px-4 max-w-3xl">

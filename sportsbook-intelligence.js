@@ -146,8 +146,7 @@ export function detectFirstMovers(oddsRows) {
 // Reads all odds_history + bets + market_consensus data
 // Computes per-book sharpness metrics
 
-export function computeBookSharpness() {
-  const allOdds = db.getAllOddsHistory();
+export function computeBookSharpness(allOdds) {
   const resolvedBets = db.getAllBets().filter((b) => b.result !== "pending");
 
   // Group odds by game
@@ -182,10 +181,11 @@ export function computeBookSharpness() {
     const firstMovers = detectFirstMovers(gameOdds);
 
     for (const [, fm] of firstMovers) {
-      // Count eligible movements for all books that had initial prices
+      // Count eligible movements only for books that had odds for this game
       for (const book of BOOKS) {
+        const hadOdds = gameOdds.some((r) => r.book === book);
         const stat = bookStats.get(book);
-        if (stat) stat.totalEligibleMovements++;
+        if (stat && hadOdds) stat.totalEligibleMovements++;
       }
 
       const stat = bookStats.get(fm.firstMoverBook);
@@ -263,7 +263,7 @@ export function computeBookSharpness() {
       outlierFreq * 15;
 
     // Scale to 0-100
-    const priceEfficiencyScore = Math.min(100, Math.max(0, score * 100));
+    const priceEfficiencyScore = Math.min(100, Math.max(0, score));
 
     bookMetrics.push({
       book,
@@ -293,7 +293,8 @@ export function computeBookSharpness() {
 
 export function runSportsbookAnalysis() {
   // 1. Compute consensus for all games and persist
-  const allOdds = db.getAllOddsHistory();
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const allOdds = db.getOddsHistorySince(thirtyDaysAgo);
   const oddsByGameAndSnapshot = new Map();
   for (const row of allOdds) {
     const key = `${row.game_id}|${row.snapshot_at}`;
@@ -335,7 +336,7 @@ export function runSportsbookAnalysis() {
   }
 
   // 3. Compute book sharpness
-  const bookMetrics = computeBookSharpness();
+  const bookMetrics = computeBookSharpness(allOdds);
 
   // 4. Persist book metrics
   for (const m of bookMetrics) {

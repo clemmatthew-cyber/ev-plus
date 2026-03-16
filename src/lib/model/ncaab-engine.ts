@@ -98,8 +98,7 @@ export function generateNcaabEvBets(
         const adjustedSpread = projection.projectedSpread + tournAdj.spreadAdjustment;
         const adjustedTotal = projection.projectedTotal + tournAdj.totalAdjustment;
         const adjustedDiff = -adjustedSpread;
-        const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma *
-          TOURNAMENT_CONFIG.tournamentSigmaMultiplier;
+        const sigma = NCAAB_CONFIG.ncaabModel.scoringMarginSigma;
         const adjustedHomeWinProb = normalCDF(adjustedDiff / sigma);
         projection = {
           ...projection,

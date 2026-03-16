@@ -304,7 +304,7 @@ function detectMarketDisagreementAlerts(currentOdds) {
 
 async function dispatchWebhook(url, alert) {
   try {
-    await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -316,6 +316,9 @@ async function dispatchWebhook(url, alert) {
         created_at: alert.created_at,
       }),
     });
+    if (response.ok && alert.id) {
+      db.markAlertWebhookSent(alert.id);
+    }
   } catch (err) {
     console.error(`[ALERT] Webhook failed:`, err.message);
   }
@@ -323,7 +326,7 @@ async function dispatchWebhook(url, alert) {
 
 // ─── Orchestrator ───
 
-export function runAlertEngine(currentOdds, currentBets, goalieConfirmations) {
+export async function runAlertEngine(currentOdds, currentBets, goalieConfirmations) {
   const alerts = [];
 
   alerts.push(...detectStaleBookAlerts(currentOdds, currentBets));
@@ -347,8 +350,7 @@ export function runAlertEngine(currentOdds, currentBets, goalieConfirmations) {
   const webhookUrl = process.env.ALERT_WEBHOOK_URL;
   if (webhookUrl) {
     for (const alert of insertedAlerts.filter(a => a.severity !== "low")) {
-      dispatchWebhook(webhookUrl, alert);
-      if (alert.id) db.markAlertWebhookSent(alert.id);
+      await dispatchWebhook(webhookUrl, alert);
     }
   }
 

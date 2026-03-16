@@ -17,7 +17,7 @@ export async function getAllBets(): Promise<TrackedBet[]> {
 
 export async function placeBet(ev: EvBet): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/bets`, {
+    const res = await fetch(`${API_BASE}/api/bets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -43,17 +43,25 @@ export async function placeBet(ev: EvBet): Promise<void> {
         result: "pending",
       }),
     });
-  } catch {}
+    if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
+  } catch (err) {
+    console.error('[store]', err);
+    throw err;
+  }
 }
 
 export async function unplaceBet(gameId: string, outcome: string, book: string): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/bets/unplace-by-key`, {
+    const res = await fetch(`${API_BASE}/api/bets/unplace-by-key`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameId, outcome, book }),
     });
-  } catch {}
+    if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
+  } catch (err) {
+    console.error('[store]', err);
+    throw err;
+  }
 }
 
 export async function isBetTracked(gameId: string, outcome: string, book: string): Promise<boolean> {
@@ -67,28 +75,40 @@ export async function isBetTracked(gameId: string, outcome: string, book: string
 
 export async function updateBet(id: string, patch: Partial<TrackedBet>): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/bets/${id}`, {
+    const res = await fetch(`${API_BASE}/api/bets/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-  } catch {}
+    if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
+  } catch (err) {
+    console.error('[store]', err);
+    throw err;
+  }
 }
 
 export async function bulkUpdate(updates: { id: string; patch: Partial<TrackedBet> }[]): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/bets/resolve`, {
+    const res = await fetch(`${API_BASE}/api/bets/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ updates }),
     });
-  } catch {}
+    if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
+  } catch (err) {
+    console.error('[store]', err);
+    throw err;
+  }
 }
 
 export async function deleteBet(id: string): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/bets/${id}`, { method: "DELETE" });
-  } catch {}
+    const res = await fetch(`${API_BASE}/api/bets/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`Store operation failed: ${res.status}`);
+  } catch (err) {
+    console.error('[store]', err);
+    throw err;
+  }
 }
 
 export function computeSummary(bets: TrackedBet[]): import("./types").TrackerSummary {
@@ -106,11 +126,12 @@ export function computeSummary(bets: TrackedBet[]): import("./types").TrackerSum
   const avgCLV = clvBets.length > 0
     ? clvBets.reduce((s, b) => s + (b.clv ?? 0), 0) / clvBets.length
     : null;
-  const brier = resolved.length > 0
-    ? resolved.reduce((s, b) => {
+  const brierBets = resolved.filter(b => b.result === "win" || b.result === "loss");
+  const brier = brierBets.length > 0
+    ? brierBets.reduce((s, b) => {
         const actual = b.result === "win" ? 1 : 0;
         return s + Math.pow(b.modelProb - actual, 2);
-      }, 0) / resolved.length
+      }, 0) / brierBets.length
     : 0;
 
   return {

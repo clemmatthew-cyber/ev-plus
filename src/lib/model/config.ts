@@ -119,6 +119,9 @@ export interface ModelConfig {
   // ─── Lineup Adjustment ───
   lineupAdjustmentEnabled: boolean;
   lineupIncompleteConfidencePenalty: number;  // confidence penalty when lineup data incomplete
+
+  // ─── Depth Score ───
+  depthDivisor?: number;  // games-played divisor for depth score (default 60)
 }
 
 export const DEFAULT_CONFIG: ModelConfig = {

@@ -92,7 +92,7 @@ function clamp(val, lo, hi) {
  * Compute composite score from a set of evaluated bets.
  * Lower is better.
  */
-export function computeCompositeScore(evals, params, paramKey) {
+export function computeCompositeScore(evals, params) {
   const nonPush = evals.filter(e => e.actual_outcome !== -1);
   if (nonPush.length === 0) return { composite: 1, brier: 0.25, logLoss: 0.693, avgClv: 0, roi: 0, calibrationError: 1 };
 
@@ -150,6 +150,12 @@ export function computeCompositeScore(evals, params, paramKey) {
 
 // ─── Walk-Forward Validation ───
 
+// KNOWN LIMITATION: The test set contains model_prob values generated with the
+// original parameters, not the candidate parameters being evaluated. We cannot
+// recompute model probabilities here because raw features are not stored in
+// prediction evals. To avoid scoring stale predictions as if they came from the
+// candidate model, validation uses only market-derived metrics (CLV, ROI) which
+// are independent of model_prob.
 function walkForwardValidate(evals, paramKey, candidateValue, currentParams) {
   const sorted = [...evals].sort((a, b) => a.resolved_at.localeCompare(b.resolved_at));
   const splitIdx = Math.floor(sorted.length * 0.7);
@@ -158,8 +164,13 @@ function walkForwardValidate(evals, paramKey, candidateValue, currentParams) {
   if (testSet.length < 15) return null;
 
   const testParams = { ...currentParams, [paramKey]: candidateValue };
-  const score = computeCompositeScore(testSet, testParams, paramKey);
-  return score.composite;
+  const score = computeCompositeScore(testSet, testParams);
+
+  // Use only CLV and ROI for validation — these are based on actual market
+  // data and closing lines, not model_prob which was baked in with old params.
+  const normalizedAvgCLV = clamp(score.avgClv / 5, -1, 1);
+  const normalizedROI = clamp(score.roi / 10, -1, 1);
+  return 0.55 * (1 - normalizedAvgCLV) + 0.45 * (1 - normalizedROI);
 }
 
 // ─── Per-Parameter Sample Size Check ───
@@ -234,7 +245,7 @@ export function runRecalibration(triggerType = "manual") {
   }
 
   // 4. Compute baseline composite score
-  const baseline = computeCompositeScore(nonPush, currentParams, null);
+  const baseline = computeCompositeScore(nonPush, currentParams);
 
   // 5. Sweep each tunable parameter
   const changes = [];
@@ -295,7 +306,7 @@ export function runRecalibration(triggerType = "manual") {
   }
 
   // 7. Compute final composite score
-  const final = computeCompositeScore(nonPush, currentParams, null);
+  const final = computeCompositeScore(nonPush, currentParams);
 
   // 8. Update run record
   const duration = Date.now() - startTime;
