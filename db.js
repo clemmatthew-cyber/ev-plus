@@ -223,6 +223,7 @@ db.exec(`
     outlier_distance REAL,
     first_mover_book TEXT,
     snapshot_at TEXT NOT NULL,
+    UNIQUE(game_id, market, outcome_name, snapshot_at),
     FOREIGN KEY (game_id) REFERENCES games(id)
   );
   CREATE INDEX IF NOT EXISTS idx_consensus_game ON market_consensus(game_id);
@@ -236,7 +237,7 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'unknown',
     source TEXT NOT NULL DEFAULT 'dailyfaceoff',
     snapshot_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(game_date, team, snapshot_at)
+    UNIQUE(game_date, team)
   );
   CREATE INDEX IF NOT EXISTS idx_goalie_conf_date ON goalie_confirmations(game_date);
   CREATE INDEX IF NOT EXISTS idx_goalie_conf_team ON goalie_confirmations(team);
@@ -657,7 +658,7 @@ const stmts = {
 
   // Market consensus
   insertMarketConsensus: db.prepare(`
-    INSERT INTO market_consensus (
+    INSERT OR REPLACE INTO market_consensus (
       game_id, market, outcome_name, outcome_point, consensus_price,
       num_books, outlier_book, outlier_distance, first_mover_book, snapshot_at
     ) VALUES (
@@ -669,16 +670,18 @@ const stmts = {
 
   // Bulk helpers for sportsbook
   getAllOddsHistory: db.prepare("SELECT * FROM odds_history ORDER BY snapshot_at ASC"),
+  getOddsHistorySince: db.prepare("SELECT * FROM odds_history WHERE snapshot_at >= ? ORDER BY snapshot_at ASC"),
   getDistinctOddsGameIds: db.prepare("SELECT DISTINCT game_id FROM odds_history"),
 
   // Goalie confirmations
   upsertGoalieConfirmation: db.prepare(`
     INSERT INTO goalie_confirmations (game_date, team, goalie_name, status, source, snapshot_at)
     VALUES (@game_date, @team, @goalie_name, @status, @source, datetime('now'))
-    ON CONFLICT(game_date, team, snapshot_at) DO UPDATE SET
+    ON CONFLICT(game_date, team) DO UPDATE SET
       goalie_name = excluded.goalie_name,
       status = excluded.status,
-      source = excluded.source
+      source = excluded.source,
+      snapshot_at = datetime('now')
   `),
   getGoalieConfirmation: db.prepare(
     "SELECT * FROM goalie_confirmations WHERE game_date = ? AND team = ? ORDER BY snapshot_at DESC LIMIT 1"
@@ -1027,6 +1030,10 @@ export function getLineupAdjustmentsByDate(gameDate) { return stmts.getLineupAdj
 
 export function getAllOddsHistory() {
   return stmts.getAllOddsHistory.all();
+}
+
+export function getOddsHistorySince(sinceDate) {
+  return stmts.getOddsHistorySince.all(sinceDate);
 }
 
 export function getDistinctOddsGameIds() {

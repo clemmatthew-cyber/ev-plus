@@ -15,14 +15,17 @@ import { runRecalibration, getActiveModelConfig } from "./recalibration-engine.j
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+function currentNHLSeason() {
+  const now = new Date();
+  const year = now.getFullYear();
+  // NHL season spans Oct-Jun; if before September, it's the current year's season
+  return now.getMonth() < 8 ? year : year + 1;
+}
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-const ODDS_API_KEY = process.env.ODDS_API_KEY;
-if (!ODDS_API_KEY) {
-  console.error("FATAL: ODDS_API_KEY not set in environment. Create a .env file.");
-  process.exit(1);
-}
+const ODDS_API_KEY = process.env.ODDS_API_KEY || "a03c63d84fa0e5dd7141a9b0b389b6bf";
 
 // ─── CORS (allow external frontends) ───
 
@@ -31,6 +34,24 @@ app.use(cors());
 // ─── JSON body parsing (must be before route handlers) ───
 
 app.use(express.json());
+
+// ─── API key auth for mutation endpoints ───
+
+const API_KEY = process.env.EV_PLUS_API_KEY;
+
+function authMiddleware(req, res, next) {
+  if (!API_KEY) return next(); // skip if no key configured
+  const provided = req.headers['x-api-key'] || req.headers.authorization?.replace('Bearer ', '');
+  if (provided !== API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  return authMiddleware(req, res, next);
+});
 
 // ─── Cache ───
 
@@ -119,7 +140,7 @@ app.get("/api/stats", async (_req, res) => {
     }
 
     const url =
-      "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/teams.csv";
+      `https://moneypuck.com/moneypuck/playerData/seasonSummary/${currentNHLSeason()}/regular/teams.csv`;
 
     const upstream = await fetch(url);
     if (!upstream.ok) {
@@ -155,7 +176,7 @@ app.get("/api/goalies", async (_req, res) => {
     }
 
     const url =
-      "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/goalies.csv";
+      `https://moneypuck.com/moneypuck/playerData/seasonSummary/${currentNHLSeason()}/regular/goalies.csv`;
 
     const upstream = await fetch(url);
     if (!upstream.ok) {
