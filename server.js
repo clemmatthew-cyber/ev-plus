@@ -1098,7 +1098,7 @@ app.post("/api/alerts/run", (_req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
     // Get latest odds snapshots from today
-    const allOdds = db.getAllOddsHistory().filter(r => r.snapshot_at.startsWith(today));
+    const allOdds = db.getOddsHistorySince(today);
     const bets = db.getAllBets().filter(b => b.result === "pending");
     const goalieConfs = db.getGoalieConfirmationsByDate(today);
     const result = runAlertEngine(allOdds, bets, goalieConfs);
