@@ -1,5 +1,6 @@
 // ─── Adaptive Parameter Tuning & Weekly Self-Calibration Engine ───
 // Runs bounded parameter sweeps with walk-forward validation to tune model params.
+// NOW uses ALL predictions (prediction_outcomes) for accuracy metrics, not just booked bets.
 
 import * as db from "./db.js";
 
@@ -107,13 +108,14 @@ export function computeCompositeScore(evals, params, paramKey) {
   }, 0);
   const logLoss = logLossSum / nonPush.length;
 
-  // Average CLV
-  const withClv = evals.filter(e => e.clv !== null && e.clv !== undefined);
+  // Average CLV (only available on booked bets — graceful when missing)
+  const withClv = evals.filter(e => e.clv !== null && e.clv !== undefined && typeof e.clv === 'number');
   const avgClv = withClv.length > 0 ? withClv.reduce((acc, e) => acc + e.clv, 0) / withClv.length : 0;
 
-  // ROI
-  const totalPL = evals.reduce((acc, e) => acc + e.profit_loss, 0);
-  const totalStaked = evals.reduce((acc, e) => acc + e.stake, 0);
+  // ROI (only available on booked bets — graceful when missing)
+  const withStake = evals.filter(e => typeof e.stake === 'number' && e.stake > 0);
+  const totalPL = withStake.reduce((acc, e) => acc + (e.profit_loss ?? 0), 0);
+  const totalStaked = withStake.reduce((acc, e) => acc + e.stake, 0);
   const roi = totalStaked > 0 ? (totalPL / totalStaked) * 100 : 0;
 
   // Calibration Error — mean |actual_win_rate - avg_model_prob| across 10 buckets
@@ -138,11 +140,12 @@ export function computeCompositeScore(evals, params, paramKey) {
   const normalizedROI = clamp(roi / 10, -1, 1);
 
   // Composite (lower is better)
+  // Weights shifted: accuracy metrics weighted higher now that we learn from ALL predictions
   const composite =
-    0.30 * normalizedBrier +
-    0.25 * normalizedLogLoss +
-    0.20 * (1 - normalizedAvgCLV) +
-    0.15 * (1 - normalizedROI) +
+    0.35 * normalizedBrier +
+    0.30 * normalizedLogLoss +
+    0.15 * (1 - normalizedAvgCLV) +
+    0.10 * (1 - normalizedROI) +
     0.10 * calibrationError;
 
   return { composite, brier, logLoss, avgClv, roi, calibrationError };
@@ -212,20 +215,28 @@ export function runRecalibration(triggerType = "manual") {
     sample_size: 0,
   });
 
-  // 2. Gather historical data
-  const evals = db.getAllPredictionEvals();
-  const nonPush = evals.filter(e => e.actual_outcome !== -1);
+  // 2. Gather historical data — ALL predictions, not just booked bets
+  const allPredictions = db.getAllResolvedPredictionOutcomes();
+  const nonPush = allPredictions.filter(e => e.actual_outcome !== -1);
+
+  // Also get booked bet evaluations for CLV/ROI metrics
+  const betEvals = db.getAllPredictionEvals();
+  const betNonPush = betEvals.filter(e => e.actual_outcome !== -1);
 
   if (nonPush.length < 50) {
     db.updateRecalibrationRun({
       id: runId,
       status: "skipped",
       sample_size: nonPush.length,
-      notes: `Insufficient data: ${nonPush.length} bets (need 50)`,
+      notes: `Insufficient data: ${nonPush.length} predictions (need 50)`,
       completed_at: new Date().toISOString(),
     });
     return { ok: false, reason: "Insufficient data", sampleSize: nonPush.length };
   }
+
+  // Enrich prediction data with resolved_at for walk-forward sort
+  // prediction_outcomes use resolved_at, prediction_evaluations use resolved_at
+  const evals = nonPush;
 
   // 3. Get current parameter values
   const currentParams = {};

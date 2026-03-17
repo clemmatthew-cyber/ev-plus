@@ -12,6 +12,7 @@ import * as evaluation from "./evaluation.js";
 import * as sportsbook from "./sportsbook-intelligence.js";
 import { runAlertEngine } from "./alert-engine.js";
 import { runRecalibration, getActiveModelConfig } from "./recalibration-engine.js";
+import { resolveGameScores, gradeAllPredictions } from "./prediction-grader.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -556,6 +557,29 @@ app.post("/api/model-snapshot", (req, res) => {
         snapshot_at: r.snapshotAt,
       }))
     );
+    // Also write to prediction_outcomes for the learning pipeline
+    try {
+      db.upsertManyPredictionOutcomes(
+        results.map((r) => ({
+          game_id: r.gameId,
+          sport: r.sport,
+          market: r.market,
+          outcome: r.outcome,
+          model_prob: r.modelProb,
+          fair_prob: r.fairProb,
+          implied_prob: r.impliedProb,
+          edge: r.edge,
+          best_price: r.bestPrice,
+          best_line: r.bestLine ?? null,
+          confidence_score: r.confidenceScore,
+          confidence_grade: r.confidenceGrade,
+          predicted_at: r.snapshotAt,
+        }))
+      );
+    } catch (poErr) {
+      console.error("[model-snapshot] prediction_outcomes write error:", poErr.message);
+    }
+
     res.json({ ok: true, count: results.length });
   } catch (err) {
     console.error("[model-snapshot] DB error:", err.message);
@@ -678,6 +702,96 @@ app.get("/api/health", (_req, res) => {
     db: "sqlite",
     uptime: Math.round(process.uptime()),
   });
+});
+
+// ─── /api/predictions (learning pipeline) ───
+
+app.get("/api/predictions/stats", (_req, res) => {
+  try {
+    const rows = db.getPredictionOutcomeStats();
+    // Aggregate totals
+    let totalPredictions = 0, totalResolved = 0, totalCorrect = 0, totalIncorrect = 0, totalPushes = 0;
+    const bySport = {};
+    const byMarket = {};
+    const byGrade = {};
+
+    for (const r of rows) {
+      totalPredictions += r.total;
+      totalResolved += r.resolved;
+      totalCorrect += r.correct;
+      totalIncorrect += r.incorrect;
+      totalPushes += r.pushes;
+
+      // By sport
+      if (!bySport[r.sport]) bySport[r.sport] = { total: 0, resolved: 0, correct: 0, incorrect: 0 };
+      bySport[r.sport].total += r.total;
+      bySport[r.sport].resolved += r.resolved;
+      bySport[r.sport].correct += r.correct;
+      bySport[r.sport].incorrect += r.incorrect;
+
+      // By market
+      if (!byMarket[r.market]) byMarket[r.market] = { total: 0, resolved: 0, correct: 0, incorrect: 0 };
+      byMarket[r.market].total += r.total;
+      byMarket[r.market].resolved += r.resolved;
+      byMarket[r.market].correct += r.correct;
+      byMarket[r.market].incorrect += r.incorrect;
+
+      // By grade
+      if (!byGrade[r.confidence_grade]) byGrade[r.confidence_grade] = { total: 0, resolved: 0, correct: 0, incorrect: 0 };
+      byGrade[r.confidence_grade].total += r.total;
+      byGrade[r.confidence_grade].resolved += r.resolved;
+      byGrade[r.confidence_grade].correct += r.correct;
+      byGrade[r.confidence_grade].incorrect += r.incorrect;
+    }
+
+    const nonPush = totalResolved - totalPushes;
+    res.json({
+      totalPredictions,
+      totalResolved,
+      totalCorrect,
+      totalIncorrect,
+      totalPushes,
+      accuracy: nonPush > 0 ? Math.round((totalCorrect / nonPush) * 1000) / 10 : null,
+      bySport: Object.fromEntries(
+        Object.entries(bySport).map(([k, v]) => [
+          k,
+          { ...v, accuracy: (v.resolved - (rows.filter(r => r.sport === k).reduce((a, r) => a + r.pushes, 0))) > 0
+            ? Math.round((v.correct / (v.resolved - rows.filter(r => r.sport === k).reduce((a, r) => a + r.pushes, 0))) * 1000) / 10
+            : null },
+        ])
+      ),
+      byMarket: Object.fromEntries(
+        Object.entries(byMarket).map(([k, v]) => [
+          k,
+          { ...v, accuracy: (v.resolved - (rows.filter(r => r.market === k).reduce((a, r) => a + r.pushes, 0))) > 0
+            ? Math.round((v.correct / (v.resolved - rows.filter(r => r.market === k).reduce((a, r) => a + r.pushes, 0))) * 1000) / 10
+            : null },
+        ])
+      ),
+      byGrade: Object.fromEntries(
+        Object.entries(byGrade).map(([k, v]) => [
+          k,
+          { ...v, accuracy: (v.resolved - (rows.filter(r => r.confidence_grade === k).reduce((a, r) => a + r.pushes, 0))) > 0
+            ? Math.round((v.correct / (v.resolved - rows.filter(r => r.confidence_grade === k).reduce((a, r) => a + r.pushes, 0))) * 1000) / 10
+            : null },
+        ])
+      ),
+    });
+  } catch (err) {
+    console.error("[predictions/stats] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/predictions/grade", async (_req, res) => {
+  try {
+    const scores = await resolveGameScores();
+    const graded = gradeAllPredictions();
+    res.json({ ok: true, scoresResolved: scores.resolved, predictionsGraded: graded.graded });
+  } catch (err) {
+    console.error("[predictions/grade] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── /api/evaluation ───
@@ -1343,3 +1457,27 @@ function maybeRunWeeklyRecalibration() {
 
 setTimeout(maybeRunWeeklyRecalibration, 30000);
 setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000);
+
+// ─── Prediction Learning Pipeline Timers ───
+// Resolve game scores every 30 min, grade predictions 5 min later
+
+async function runPredictionLearning() {
+  try {
+    const scores = await resolveGameScores();
+    if (scores.resolved > 0) console.log(`[PredLearn] Resolved ${scores.resolved} game scores`);
+  } catch (err) {
+    console.error("[PredLearn] Score resolution failed:", err.message);
+  }
+  // Grade after a brief delay to let scores settle
+  setTimeout(() => {
+    try {
+      const graded = gradeAllPredictions();
+      if (graded.graded > 0) console.log(`[PredLearn] Graded ${graded.graded} predictions`);
+    } catch (err) {
+      console.error("[PredLearn] Grading failed:", err.message);
+    }
+  }, 5000);
+}
+
+setTimeout(runPredictionLearning, 60000); // 1 min after startup
+setInterval(runPredictionLearning, 30 * 60 * 1000); // every 30 min

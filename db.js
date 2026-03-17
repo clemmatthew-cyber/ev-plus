@@ -392,6 +392,34 @@ db.exec(`
     UNIQUE(game_id, underdog_team)
   );
   CREATE INDEX IF NOT EXISTS idx_upset_signals_game ON upset_signals(game_id);
+
+  CREATE TABLE IF NOT EXISTS prediction_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    sport TEXT NOT NULL,
+    market TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    model_prob REAL NOT NULL,
+    fair_prob REAL NOT NULL,
+    implied_prob REAL NOT NULL,
+    edge REAL NOT NULL,
+    best_price INTEGER NOT NULL,
+    best_line REAL,
+    confidence_score REAL NOT NULL,
+    confidence_grade TEXT NOT NULL,
+    predicted_at TEXT NOT NULL,
+    actual_outcome INTEGER,
+    home_score INTEGER,
+    away_score INTEGER,
+    period_type TEXT,
+    resolved_at TEXT,
+    was_bet INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(game_id, market, outcome),
+    FOREIGN KEY (game_id) REFERENCES games(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pred_out_game ON prediction_outcomes(game_id);
+  CREATE INDEX IF NOT EXISTS idx_pred_out_sport ON prediction_outcomes(sport);
+  CREATE INDEX IF NOT EXISTS idx_pred_out_resolved ON prediction_outcomes(resolved_at);
 `);
 
 // ─── Seed bankroll if table is empty ───
@@ -439,6 +467,36 @@ if (paramCount.cnt === 0) {
       description: p.desc,
     });
   }
+}
+
+// ─── Pre-statement migrations (must run BEFORE prepared statements are compiled) ───
+
+// Fix goalie_confirmations: UNIQUE(game_date, team, snapshot_at) → UNIQUE(game_date, team)
+try {
+  const gcSchema = db.prepare("SELECT sql FROM sqlite_master WHERE name='goalie_confirmations'").get();
+  if (gcSchema && gcSchema.sql.includes('UNIQUE(game_date, team, snapshot_at)')) {
+    db.exec(`
+      CREATE TABLE goalie_confirmations_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_date TEXT NOT NULL,
+        team TEXT NOT NULL,
+        goalie_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'unknown',
+        source TEXT NOT NULL DEFAULT 'dailyfaceoff',
+        snapshot_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(game_date, team)
+      );
+      INSERT OR REPLACE INTO goalie_confirmations_new (id, game_date, team, goalie_name, status, source, snapshot_at)
+        SELECT id, game_date, team, goalie_name, status, source, snapshot_at FROM goalie_confirmations;
+      DROP TABLE goalie_confirmations;
+      ALTER TABLE goalie_confirmations_new RENAME TO goalie_confirmations;
+      CREATE INDEX IF NOT EXISTS idx_goalie_conf_date ON goalie_confirmations(game_date);
+      CREATE INDEX IF NOT EXISTS idx_goalie_conf_team ON goalie_confirmations(team);
+    `);
+    console.log('[db] Migrated goalie_confirmations UNIQUE constraint');
+  }
+} catch (err) {
+  console.error('[db] goalie_confirmations pre-migration error:', err.message);
 }
 
 // ─── Prepared statements ───
@@ -811,6 +869,63 @@ const stmts = {
   `),
   getParameterHistoryByRun: db.prepare("SELECT * FROM parameter_history WHERE run_id = ? ORDER BY param_key ASC"),
   getParameterHistoryByKey: db.prepare("SELECT * FROM parameter_history WHERE param_key = ? ORDER BY changed_at DESC LIMIT ?"),
+
+  // Prediction outcomes
+  upsertPredictionOutcome: db.prepare(`
+    INSERT INTO prediction_outcomes (
+      game_id, sport, market, outcome, model_prob, fair_prob, implied_prob,
+      edge, best_price, best_line, confidence_score, confidence_grade, predicted_at
+    ) VALUES (
+      @game_id, @sport, @market, @outcome, @model_prob, @fair_prob, @implied_prob,
+      @edge, @best_price, @best_line, @confidence_score, @confidence_grade, @predicted_at
+    ) ON CONFLICT(game_id, market, outcome) DO UPDATE SET
+      model_prob = excluded.model_prob,
+      fair_prob = excluded.fair_prob,
+      implied_prob = excluded.implied_prob,
+      edge = excluded.edge,
+      best_price = excluded.best_price,
+      best_line = excluded.best_line,
+      confidence_score = excluded.confidence_score,
+      confidence_grade = excluded.confidence_grade,
+      predicted_at = excluded.predicted_at
+  `),
+  getUnresolvedPredictionOutcomes: db.prepare(
+    "SELECT po.*, g.home_team, g.away_team, g.home_score AS g_home_score, g.away_score AS g_away_score, g.period_type AS g_period_type, g.game_state " +
+    "FROM prediction_outcomes po JOIN games g ON po.game_id = g.id " +
+    "WHERE po.actual_outcome IS NULL AND g.game_state = 'final'"
+  ),
+  getAllResolvedPredictionOutcomes: db.prepare(
+    "SELECT * FROM prediction_outcomes WHERE actual_outcome IS NOT NULL ORDER BY resolved_at DESC"
+  ),
+  updatePredictionOutcomeResult: db.prepare(`
+    UPDATE prediction_outcomes SET
+      actual_outcome = @actual_outcome,
+      home_score = @home_score,
+      away_score = @away_score,
+      period_type = @period_type,
+      resolved_at = @resolved_at
+    WHERE id = @id
+  `),
+  markPredictionAsBet: db.prepare(
+    "UPDATE prediction_outcomes SET was_bet = 1 WHERE game_id = ? AND market = ? AND outcome = ?"
+  ),
+  getPredictionOutcomeStats: db.prepare(`
+    SELECT sport, market, confidence_grade,
+      COUNT(*) AS total,
+      SUM(CASE WHEN actual_outcome IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
+      SUM(CASE WHEN actual_outcome = 1 THEN 1 ELSE 0 END) AS correct,
+      SUM(CASE WHEN actual_outcome = 0 THEN 1 ELSE 0 END) AS incorrect,
+      SUM(CASE WHEN actual_outcome = -1 THEN 1 ELSE 0 END) AS pushes
+    FROM prediction_outcomes
+    GROUP BY sport, market, confidence_grade
+  `),
+  getGamesNeedingScores: db.prepare(
+    "SELECT * FROM games WHERE game_state != 'final' AND commence_time < datetime('now')"
+  ),
+  getAllModelResults: db.prepare("SELECT * FROM model_results ORDER BY snapshot_at DESC"),
+  getExistingPredictionOutcomeGameIds: db.prepare(
+    "SELECT DISTINCT game_id FROM prediction_outcomes"
+  ),
 };
 
 // ─── Exported CRUD helpers ───
@@ -1082,6 +1197,7 @@ export function migrateSchema() {
   if (!columnExists("bets", "clv")) {
     db.exec("ALTER TABLE bets ADD COLUMN clv REAL");
   }
+
 }
 
 // Run migration on startup
@@ -1186,6 +1302,50 @@ export function getParameterHistoryByRun(runId) {
 
 export function getParameterHistoryByKey(key, limit = 20) {
   return stmts.getParameterHistoryByKey.all(key, limit);
+}
+
+// -- Prediction Outcomes --
+
+export function upsertPredictionOutcome(row) {
+  return stmts.upsertPredictionOutcome.run(row);
+}
+
+export const upsertManyPredictionOutcomes = db.transaction((rows) => {
+  for (const r of rows) {
+    stmts.upsertPredictionOutcome.run(r);
+  }
+});
+
+export function getUnresolvedPredictionOutcomes() {
+  return stmts.getUnresolvedPredictionOutcomes.all();
+}
+
+export function getAllResolvedPredictionOutcomes() {
+  return stmts.getAllResolvedPredictionOutcomes.all();
+}
+
+export function updatePredictionOutcomeResult(patch) {
+  return stmts.updatePredictionOutcomeResult.run(patch);
+}
+
+export function markPredictionAsBet(gameId, market, outcome) {
+  return stmts.markPredictionAsBet.run(gameId, market, outcome);
+}
+
+export function getPredictionOutcomeStats() {
+  return stmts.getPredictionOutcomeStats.all();
+}
+
+export function getGamesNeedingScores() {
+  return stmts.getGamesNeedingScores.all();
+}
+
+export function getAllModelResults() {
+  return stmts.getAllModelResults.all();
+}
+
+export function getExistingPredictionOutcomeGameIds() {
+  return stmts.getExistingPredictionOutcomeGameIds.all().map(r => r.game_id);
 }
 
 // -- Cleanup --
