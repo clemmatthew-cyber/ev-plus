@@ -277,6 +277,112 @@ app.get("/api/scores/:date", async (req, res) => {
   }
 });
 
+// ─── /api/nba/team-stats ───
+// Proxies NBA.com leaguedashteamstats endpoint (CORS blocked from browser).
+// Fetches all 4 variants (full season, last 10, home, away) in parallel.
+
+const NBA_STATS_CACHE_TTL = 30 * 60_000; // 30 minutes
+const nbaStatsCache = { data: null, ts: 0 };
+
+const NBA_STATS_HEADERS = {
+  "User-Agent": "Mozilla/5.0",
+  "Referer": "https://www.nba.com/",
+  "Accept": "application/json",
+  "x-nba-stats-origin": "stats",
+  "x-nba-stats-token": "true",
+};
+
+async function fetchNbaLeagueStats(extraParams = "") {
+  const base = "https://stats.nba.com/stats/leaguedashteamstats";
+  const params = `Season=2025-26&SeasonType=Regular+Season&MeasureType=Advanced&PerMode=PerGame${extraParams}`;
+  const url = `${base}?${params}`;
+  const resp = await fetch(url, { headers: NBA_STATS_HEADERS });
+  if (!resp.ok) throw new Error(`NBA API ${resp.status}`);
+  return resp.json();
+}
+
+app.get("/api/nba/team-stats", async (_req, res) => {
+  try {
+    if (nbaStatsCache.data && Date.now() - nbaStatsCache.ts < NBA_STATS_CACHE_TTL) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(nbaStatsCache.data);
+    }
+
+    const [fullSeason, last10, home, away] = await Promise.all([
+      fetchNbaLeagueStats(""),
+      fetchNbaLeagueStats("&LastNGames=10"),
+      fetchNbaLeagueStats("&Location=Home"),
+      fetchNbaLeagueStats("&Location=Road"),
+    ]);
+
+    const data = { fullSeason, last10, home, away };
+    nbaStatsCache.data = data;
+    nbaStatsCache.ts = Date.now();
+
+    res.setHeader("X-Cache", "MISS");
+    res.json(data);
+  } catch (err) {
+    console.error("[nba-stats] error:", err.message);
+    if (nbaStatsCache.data) {
+      res.setHeader("X-Cache", "STALE");
+      return res.json(nbaStatsCache.data);
+    }
+    res.status(502).json({ error: "NBA stats API unreachable" });
+  }
+});
+
+// ─── /api/nba/schedule/:date ───
+// Proxies NBA schedule data for fatigue detection.
+
+const nbaScheduleCache = new Map(); // date → { data, ts }
+const NBA_SCHEDULE_CACHE_TTL = 60 * 60_000; // 1 hour
+
+app.get("/api/nba/schedule/:date", async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "Invalid date format, use YYYY-MM-DD" });
+  }
+
+  try {
+    const cached = nbaScheduleCache.get(date);
+    if (cached && Date.now() - cached.ts < NBA_SCHEDULE_CACHE_TTL) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached.data);
+    }
+
+    // Use NBA scoreboard API for game data on a specific date
+    const url = `https://stats.nba.com/stats/scoreboardv3?GameDate=${date}&LeagueID=00`;
+    const upstream = await fetch(url, { headers: NBA_STATS_HEADERS });
+    if (!upstream.ok) {
+      console.error(`[nba-schedule] upstream ${upstream.status}`);
+      return res.status(upstream.status).json({ error: `NBA API ${upstream.status}` });
+    }
+
+    const data = await upstream.json();
+    nbaScheduleCache.set(date, { data, ts: Date.now() });
+
+    // Evict old cache entries
+    if (nbaScheduleCache.size > 14) {
+      let oldestKey = null, oldestTs = Infinity;
+      for (const [k, v] of nbaScheduleCache) {
+        if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+      }
+      if (oldestKey) nbaScheduleCache.delete(oldestKey);
+    }
+
+    res.setHeader("X-Cache", "MISS");
+    res.json(data);
+  } catch (err) {
+    console.error("[nba-schedule] error:", err.message);
+    const cached = nbaScheduleCache.get(date);
+    if (cached) {
+      res.setHeader("X-Cache", "STALE");
+      return res.json(cached.data);
+    }
+    res.status(502).json({ error: "NBA schedule API unreachable" });
+  }
+});
+
 // ─── /api/bankroll ───
 // Now backed by SQLite (persists across server restarts)
 

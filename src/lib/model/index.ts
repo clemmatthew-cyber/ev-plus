@@ -13,6 +13,8 @@ export { computeConfidence, type ConfidenceResult } from "./confidence";
 export { generateEvBets, type GenerateInput } from "./generate";
 export { generateNbaEvBets } from "./nba";
 export { NBA_CONFIG } from "./nba-config";
+export { generateNbaEvBetsHybrid } from "./nba-engine";
+export { projectNbaGame, projectNbaScore, spreadToWinProb, totalToOverProb, spreadCoverProb, type NbaProjection, type NbaProjectionConfig } from "./nba-projections";
 export { NCAAB_CONFIG } from "./ncaab-config";
 export { generateNcaabEvBets } from "./ncaab-engine";
 export { computeNcaabProjection, type NcaabProjection } from "./ncaab-model";

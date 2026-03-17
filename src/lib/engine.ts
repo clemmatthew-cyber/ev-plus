@@ -1,7 +1,7 @@
-// ─── EV Engine v4 — Sport-Aware Router ───
+// ─── EV Engine v5 — Sport-Aware Router ───
 // NHL  → full Poisson xG model (stats + goalies + situation splits)
 // NCAAB → Torvik efficiency model + devig, with tournament adjustments
-// NBA  → pure devig model (odds-only, consensus fair prob)
+// NBA  → hybrid pace-projection + devig model
 
 import type { EvBet } from "./types";
 import { fetchOdds } from "./odds";
@@ -11,7 +11,9 @@ import { NCAAB_CONFIG } from "./model/ncaab-config";
 import { generateNcaabEvBets } from "./model/ncaab-engine";
 import { fetchTorvikStats } from "./stats/torvik";
 import { clearTeamLastGameTime } from "./model/tournament";
-import { fetchRecentSchedule } from "./schedule";
+import { fetchRecentSchedule, fetchNbaRecentSchedule } from "./schedule";
+import { fetchNbaTeamRatings } from "./stats/nba-stats";
+import { NBA_CONFIG } from "./model/nba-config";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -104,8 +106,8 @@ export async function runPipeline(
     }
     bets = generateNcaabEvBets(games, { ...config, ...NCAAB_CONFIG }, torvikStats);
   } else {
-    // NBA and any future sport → devig model
-    bets = generateNbaEvBets(games, config);
+    // NBA → hybrid pace-projection + devig model
+    bets = await runNbaPipeline(games, config);
   }
 
   // Persist model results snapshot (fire-and-forget)
@@ -147,4 +149,30 @@ async function runNhlPipeline(
     config,
     recentGames,
   });
+}
+
+/**
+ * NBA-specific pipeline: fetch team ratings + schedule, run hybrid model.
+ * Falls back gracefully to pure devig if NBA stats fetch fails.
+ */
+async function runNbaPipeline(
+  games: Awaited<ReturnType<typeof fetchOdds>>,
+  config: ModelConfig,
+): Promise<EvBet[]> {
+  const cfg = { ...config, ...NBA_CONFIG };
+
+  // Fetch NBA team ratings and schedule in parallel — graceful fallback on failure
+  const [ratingsResult, scheduleResult] = await Promise.allSettled([
+    fetchNbaTeamRatings(),
+    fetchNbaRecentSchedule(),
+  ]);
+
+  const ratings = ratingsResult.status === "fulfilled" ? ratingsResult.value : null;
+  const schedule = scheduleResult.status === "fulfilled" ? scheduleResult.value : [];
+
+  if (ratingsResult.status === "rejected") {
+    console.warn("[NBA] Stats fetch failed, falling back to pure devig:", ratingsResult.reason);
+  }
+
+  return generateNbaEvBets(games, cfg, ratings, schedule);
 }
