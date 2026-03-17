@@ -124,6 +124,20 @@ export interface ModelConfig {
   depthDivisor?: number;            // games-played divisor (default 60)
   simMaxScore?: number;             // N-24: max goals per side in simulation (default 15)
   simSpreadLines?: number[];        // N-18: spread lines for simulation
+
+  // ─── Recent Form (Fix 1) ───
+  formEnabled: boolean;
+  formLookbackGames: number;        // how many recent games to consider
+  formWeight: number;               // how much form adjusts lambda (0-1)
+  formFloor: number;                // min form multiplier
+  formCeiling: number;              // max form multiplier
+
+  // ─── Home/Away Splits (Fix 2) ───
+  homeAwaySplitEnabled: boolean;
+  homeAwaySplitWeight: number;      // blend team-specific toward league avg
+
+  // ─── Empty-Net Boost (Fix 6) ───
+  emptyNetBoost: number;            // extra expected goals for close games
 }
 
 export const DEFAULT_CONFIG: ModelConfig = {
@@ -166,7 +180,7 @@ export const DEFAULT_CONFIG: ModelConfig = {
   recencyMinGP: 40,
 
   lgAvgPPPerGame: 3.2,
-  ppXgBlend: 0.60,
+  ppXgBlend: 0.45,  // Fix 4: PP shooting is more skill-driven, weight actuals higher (was 0.60)
 
   confidence: {
     edgeWeight: 0.25,
@@ -223,4 +237,18 @@ export const DEFAULT_CONFIG: ModelConfig = {
   // Lineup Adjustment
   lineupAdjustmentEnabled: true,
   lineupIncompleteConfidencePenalty: -5,
+
+  // Recent Form (Fix 1)
+  formEnabled: true,
+  formLookbackGames: 20,
+  formWeight: 0.15,
+  formFloor: 0.92,
+  formCeiling: 1.08,
+
+  // Home/Away Splits (Fix 2)
+  homeAwaySplitEnabled: true,
+  homeAwaySplitWeight: 0.3,
+
+  // Empty-Net Boost (Fix 6)
+  emptyNetBoost: 0.15,
 };

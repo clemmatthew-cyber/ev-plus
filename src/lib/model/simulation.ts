@@ -8,6 +8,10 @@ export interface SimConfig {
   simCount: number;         // number of iterations (default 50000)
   otHomeAdvantage: number;  // home team OT/SO win probability (default 0.53)
   dixonColesRho: number;    // Dixon-Coles rho parameter (default -0.04)
+  homeOtWinRate?: number;   // Fix 7: team-specific OT win rate for home team
+  awayOtWinRate?: number;   // Fix 7: team-specific OT win rate for away team
+  simMaxScore?: number;     // N-24: max goals per side in simulation (default 15)
+  simSpreadLines?: number[];// N-18: spread lines for simulation
 }
 
 export interface SimulationResult {
@@ -109,8 +113,9 @@ export function simulateGame(
       awayWinWeight += tau;
     } else {
       drawRegWeight += tau;
-      // OT/SO resolution
-      if (Math.random() < otHomeAdvantage) {
+      // OT/SO resolution (Fix 7: team-specific OT rates)
+      const homeOtProb = cfg.homeOtWinRate ?? otHomeAdvantage;
+      if (Math.random() < homeOtProb) {
         homeWinWeight += tau;
       } else {
         awayWinWeight += tau;

@@ -3,6 +3,7 @@
 // Fetches the last N days of schedule to detect back-to-backs and rest differentials.
 
 import type { ScheduleEntry } from "./model/fatigue";
+import type { RecentGameResult } from "./model/form";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000.
 // In local dev, resolves to "" (relative paths work in the browser).
@@ -70,6 +71,34 @@ export async function fetchRecentSchedule(): Promise<ScheduleEntry[]> {
   }
 
   return entries;
+}
+
+// ─── NHL Recent Results (for form factor, rho fitting, home/away splits) ───
+
+let recentResultsCache: RecentGameResult[] | null = null;
+let recentResultsCacheTime = 0;
+
+/**
+ * Fetch recent NHL game results (last 25 days) from our backend proxy.
+ * Returns array of { team, goalsFor, goalsAgainst, date, isHome } entries.
+ * Cached for 4 hours client-side.
+ */
+export async function fetchNhlRecentResults(): Promise<RecentGameResult[]> {
+  if (recentResultsCache && Date.now() - recentResultsCacheTime < 4 * 3600_000) {
+    return recentResultsCache;
+  }
+
+  try {
+    const url = `${PROXY_BASE}/api/nhl/recent-results`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json() as RecentGameResult[];
+    recentResultsCache = data;
+    recentResultsCacheTime = Date.now();
+    return data;
+  } catch {
+    return recentResultsCache ?? [];
+  }
 }
 
 // NBA team abbreviation mapping (scoreboardv3 uses triCode)

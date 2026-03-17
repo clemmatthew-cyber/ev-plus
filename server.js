@@ -1444,6 +1444,75 @@ app.post("/api/tournament-performance/compute", (req, res) => {
   }
 });
 
+// ─── /api/nhl/recent-results ───
+// Fetches last 25 days of NHL game results for form factor + rho fitting.
+// Returns: { team, goalsFor, goalsAgainst, date, isHome }[]
+// Cached for 4 hours.
+
+let recentResultsCache = { data: null, ts: 0 };
+const RECENT_RESULTS_TTL = 4 * 3600_000; // 4 hours
+
+app.get("/api/nhl/recent-results", async (_req, res) => {
+  try {
+    if (recentResultsCache.data && Date.now() - recentResultsCache.ts < RECENT_RESULTS_TTL) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(recentResultsCache.data);
+    }
+
+    const today = new Date();
+    const dateStrings = [];
+    for (let i = 1; i <= 25; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      dateStrings.push(d.toISOString().slice(0, 10));
+    }
+
+    const results = [];
+
+    // Fetch in batches of 5 to avoid overwhelming the NHL API
+    for (let batch = 0; batch < dateStrings.length; batch += 5) {
+      const batchDates = dateStrings.slice(batch, batch + 5);
+      const batchResults = await Promise.allSettled(
+        batchDates.map(async (date) => {
+          const url = `https://api-web.nhle.com/v1/score/${date}`;
+          const upstream = await fetch(url);
+          if (!upstream.ok) return [];
+          const data = await upstream.json();
+          return (data.games ?? []).map((g) => {
+            const homeAbbrev = g.homeTeam?.abbrev;
+            const awayAbbrev = g.awayTeam?.abbrev;
+            const homeScore = g.homeTeam?.score;
+            const awayScore = g.awayTeam?.score;
+            const startTime = g.startTimeUTC || date;
+            const state = g.gameState || "";
+            if (!homeAbbrev || !awayAbbrev || homeScore == null || awayScore == null) return null;
+            if (state !== "FINAL" && state !== "OFF") return null;
+            // Return TWO entries per game (one for each team)
+            return [
+              { team: homeAbbrev, goalsFor: homeScore, goalsAgainst: awayScore, date: startTime, isHome: true },
+              { team: awayAbbrev, goalsFor: awayScore, goalsAgainst: homeScore, date: startTime, isHome: false },
+            ];
+          }).filter(Boolean).flat();
+        }),
+      );
+      for (const r of batchResults) {
+        if (r.status === "fulfilled") results.push(...r.value);
+      }
+    }
+
+    recentResultsCache = { data: results, ts: Date.now() };
+    res.setHeader("X-Cache", "MISS");
+    res.json(results);
+  } catch (err) {
+    console.error("[recent-results] error:", err.message);
+    if (recentResultsCache.data) {
+      res.setHeader("X-Cache", "STALE");
+      return res.json(recentResultsCache.data);
+    }
+    res.status(502).json({ error: "Failed to fetch recent results" });
+  }
+});
+
 // ─── Health Check (C-29) ───
 app.get('/api/health', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
 

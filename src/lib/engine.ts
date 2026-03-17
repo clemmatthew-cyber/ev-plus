@@ -11,7 +11,7 @@ import { NCAAB_CONFIG } from "./model/ncaab-config";
 import { generateNcaabEvBets } from "./model/ncaab-engine";
 import { fetchTorvikStats } from "./stats/torvik";
 import { clearTeamLastGameTime } from "./model/tournament";
-import { fetchRecentSchedule, fetchNbaRecentSchedule } from "./schedule";
+import { fetchRecentSchedule, fetchNbaRecentSchedule, fetchNhlRecentResults } from "./schedule";
 import { fetchNbaTeamRatings } from "./stats/nba-stats";
 import { NBA_CONFIG } from "./model/nba-config";
 
@@ -123,10 +123,11 @@ async function runNhlPipeline(
   games: Awaited<ReturnType<typeof fetchOdds>>,
   config: ModelConfig,
 ): Promise<EvBet[]> {
-  const [stats, goalies, recentGames] = await Promise.all([
+  const [stats, goalies, recentGames, recentResults] = await Promise.all([
     fetchTeamStats(),
     fetchGoalieStats(),
     fetchRecentSchedule(),
+    fetchNhlRecentResults(),
   ]);
 
   const hasStats = stats.size > 0;
@@ -148,6 +149,7 @@ async function runNhlPipeline(
     lgGoalsPerGame,
     config,
     recentGames,
+    recentResults,
   });
 }
 

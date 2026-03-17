@@ -6,7 +6,7 @@ import type { EvBet, GoalieConfirmation, GoalieStatus } from "../types";
 import type { GameOdds, BestLine } from "../odds";
 import { findBestLine, bookName, teamAbbrev } from "../odds";
 import type { TeamStats, GoalieStats, LeagueAverages } from "../stats";
-import { getStarter } from "../stats";
+// getStarter replaced by selectLikelyStarter (Fix 5)
 
 import type { ModelConfig } from "./config";
 import { estimateMatchupLambdas } from "./lambdas";
@@ -15,6 +15,9 @@ import { computeStake } from "./kelly";
 import { computeConfidence } from "./confidence";
 import { simulateGame, type SimulationResult } from "./simulation";
 import { computeFatigueAdjustment, type ScheduleEntry } from "./fatigue";
+import { computeFormFactor, computeHomeAwaySplit, type RecentGameResult } from "./form";
+import { fitDixonColesRho, buildGameResultsForFitting } from "./fit-rho";
+import { selectLikelyStarter, type GoalieStart } from "./goalie-select";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -47,6 +50,8 @@ export interface GenerateInput {
   recentGames?: ScheduleEntry[];
   sharpBookScores?: Map<string, number>;
   goalieConfirmations?: Map<string, GoalieConfirmation>;
+  recentResults?: RecentGameResult[];
+  recentGoalieStarts?: Map<string, GoalieStart[]>;
 }
 
 /**
@@ -79,12 +84,21 @@ function findGoalieByName(
  * 7. Return sorted by edge descending
  */
 export function generateEvBets(input: GenerateInput): EvBet[] {
-  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames, sharpBookScores, goalieConfirmations } = input;
+  const { games, stats, goalies, lg, lgGoalsPerGame, config: cfg, recentGames, sharpBookScores, goalieConfirmations, recentResults, recentGoalieStarts } = input;
   const hasStats = stats.size > 0;
   const hasGoalies = goalies.size > 0;
   const max = cfg.poissonMaxGoals;
 
   const lgAvgGsax = hasGoalies ? computeLeagueAvgGsax(goalies) : 0;
+
+  // Fix 3: Fit Dixon-Coles rho from recent results if available
+  let fittedRho = cfg.dixonColesRho;
+  if (recentResults && recentResults.length > 100) {
+    const gameResults = buildGameResultsForFitting(recentResults, stats, lg);
+    if (gameResults.length >= 50) {
+      fittedRho = fitDixonColesRho(gameResults);
+    }
+  }
 
   const bets: EvBet[] = [];
   let id = 0;
@@ -96,8 +110,13 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     const aS = stats.get(aA);
     const nBooks = game.bookmakers.length;
 
-    let hGoalie = hasGoalies ? getStarter(goalies, hA) : null;
-    let aGoalie = hasGoalies ? getStarter(goalies, aA) : null;
+    // Fix 5: Smart goalie selection — use recency when available
+    let hGoalie = hasGoalies
+      ? selectLikelyStarter(goalies.get(hA) ?? [], recentGoalieStarts?.get(hA))
+      : null;
+    let aGoalie = hasGoalies
+      ? selectLikelyStarter(goalies.get(aA) ?? [], recentGoalieStarts?.get(aA))
+      : null;
 
     // ── Goalie confirmation override ──
     let hGoalieStatus: GoalieStatus = 'unknown';
@@ -143,6 +162,24 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     homeLam *= fatigue.homeFactor;
     awayLam *= fatigue.awayFactor;
 
+    // Fix 1: Apply recent form factor
+    if (recentResults && recentResults.length > 0 && hS && aS) {
+      const homeForm = computeFormFactor(hA, recentResults, hS.avgGoalsFor, hS.avgGoalsAgainst, cfg);
+      const awayForm = computeFormFactor(aA, recentResults, aS.avgGoalsFor, aS.avgGoalsAgainst, cfg);
+      homeLam *= homeForm;
+      awayLam *= awayForm;
+    }
+
+    // Fix 2: Apply per-team home/away splits
+    if (recentResults && recentResults.length > 0) {
+      const homeSplit = computeHomeAwaySplit(hA, recentResults, {
+        homeAwaySplitEnabled: cfg.homeAwaySplitEnabled,
+        homeAwaySplitWeight: cfg.homeAwaySplitWeight,
+      });
+      homeLam *= homeSplit.homeOffenseFactor;
+      awayLam /= homeSplit.homeDefenseFactor; // better home D = opponent scores less
+    }
+
     const hGP = hS?.gamesPlayed ?? 40;
     const aGP = aS?.gamesPlayed ?? 40;
 
@@ -152,7 +189,9 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       sim = simulateGame(homeLam, awayLam, {
         simCount: cfg.simCount,
         otHomeAdvantage: cfg.otHomeAdvantage,
-        dixonColesRho: cfg.dixonColesRho,
+        dixonColesRho: fittedRho,  // Fix 3: use season-fitted rho
+        simMaxScore: cfg.simMaxScore,
+        simSpreadLines: cfg.simSpreadLines,
       });
       // Validate result
       if (!isFinite(sim.homeWinProb) || !isFinite(sim.awayWinProb) ||
@@ -164,9 +203,9 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
       sim = null;
     }
 
-    // Build Poisson grid as fallback (with Dixon-Coles correction)
-    const homeGrid = sim ? buildGrid(homeLam, awayLam, max) : buildGridDC(homeLam, awayLam, max, cfg.dixonColesRho);
-    const awayGrid = sim ? buildGrid(awayLam, homeLam, max) : buildGridDC(awayLam, homeLam, max, cfg.dixonColesRho);
+    // Build Poisson grid as fallback (with Dixon-Coles correction using fitted rho)
+    const homeGrid = sim ? buildGrid(homeLam, awayLam, max) : buildGridDC(homeLam, awayLam, max, fittedRho);
+    const awayGrid = sim ? buildGrid(awayLam, homeLam, max) : buildGridDC(awayLam, homeLam, max, fittedRho);
 
     // ── Helper: evaluate one bet opportunity ──
     function tryBet(
@@ -251,10 +290,23 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
     }
 
     // ── Totals ──
+    // Fix 6: Empty-net goal adjustment for close games
+    const isCloseGame = Math.abs(homeLam - awayLam) < 0.5;
+    const enBoost = isCloseGame ? cfg.emptyNetBoost : 0;
+
     const lines = new Set<number>();
     for (const bk of game.bookmakers)
       for (const m of bk.markets)
         if (m.key === "totals") for (const o of m.outcomes) if (o.point != null) lines.add(Math.round(o.point * 10) / 10);  // C-31: round floats before dedup
+
+    // Fix 6: For simulation path, shift total probs for close games
+    if (sim && isCloseGame && enBoost > 0) {
+      for (const [, probs] of sim.totalProbs) {
+        const shift = enBoost * 0.1; // small probability shift toward over
+        probs.over = Math.min(0.95, probs.over + shift);
+        probs.under = Math.max(0.05, probs.under - shift);
+      }
+    }
 
     for (const line of lines) {
       for (const [name, isOver] of [["Over", true], ["Under", false]] as [string, boolean][]) {
@@ -265,7 +317,10 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
         if (sim && simTotal) {
           mp = isOver ? simTotal.over : simTotal.under;
         } else {
-          mp = totalProb(homeLam, awayLam, line, isOver, max, homeGrid);
+          // Fix 6: Apply empty-net boost to Poisson grid path
+          const adjustedTotalLam = homeLam + awayLam + enBoost;
+          const halfBoost = enBoost / 2;
+          mp = totalProb(homeLam + halfBoost, awayLam + halfBoost, line, isOver, max);
         }
         tryBet("totals", `${name} ${line}`, mp, bl);
       }
