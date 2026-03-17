@@ -32,16 +32,11 @@ const PROXY_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 let ratingsCache: { data: Map<string, NbaTeamRatings>; ts: number } | null = null;
 const CACHE_TTL = 30 * 60_000; // 30 minutes
 
-// NBA.com team abbreviation mapping (NBA.com uses slightly different abbrevs)
+// NBA.com abbreviations that differ from The Odds API / standard abbreviations.
+// Currently identical, but kept as a lookup in case NBA.com ever diverges.
 const NBA_ABBREV_MAP: Record<string, string> = {
-  "ATL": "ATL", "BOS": "BOS", "BKN": "BKN", "CHA": "CHA",
-  "CHI": "CHI", "CLE": "CLE", "DAL": "DAL", "DEN": "DEN",
-  "DET": "DET", "GSW": "GSW", "HOU": "HOU", "IND": "IND",
-  "LAC": "LAC", "LAL": "LAL", "MEM": "MEM", "MIA": "MIA",
-  "MIL": "MIL", "MIN": "MIN", "NOP": "NOP", "NYK": "NYK",
-  "OKC": "OKC", "ORL": "ORL", "PHI": "PHI", "PHX": "PHX",
-  "POR": "POR", "SAC": "SAC", "SAS": "SAS", "TOR": "TOR",
-  "UTA": "UTA", "WAS": "WAS",
+  // Add overrides here if NBA.com starts using different codes, e.g.:
+  // "PHX": "PHO",  // if NBA.com used PHO instead of PHX
 };
 
 interface NbaApiResponse {
@@ -114,10 +109,22 @@ export async function fetchNbaTeamRatings(): Promise<Map<string, NbaTeamRatings>
 
   const ratings = new Map<string, NbaTeamRatings>();
 
-  // League averages for fallback
-  const lgOffRtg = 112;
-  const lgDefRtg = 112;
-  const lgPace = 100;
+  // Compute league averages from actual data (fallback to static if empty)
+  let lgOffRtg = 112;
+  let lgDefRtg = 112;
+  let lgPace = 100;
+  if (full.size > 0) {
+    let sumOff = 0, sumDef = 0, sumPace = 0, n = 0;
+    for (const [, s] of full) {
+      sumOff += s.offRtg;
+      sumDef += s.defRtg;
+      sumPace += s.pace;
+      n++;
+    }
+    lgOffRtg = sumOff / n;
+    lgDefRtg = sumDef / n;
+    lgPace = sumPace / n;
+  }
 
   for (const [team, fs] of full) {
     const l10 = last10.get(team);

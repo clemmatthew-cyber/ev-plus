@@ -93,7 +93,7 @@ export function spreadToWinProb(projectedMargin: number): number {
  * Normal CDF approximation for totals probabilities.
  * Uses the Abramowitz & Stegun approximation.
  */
-function normalCDF(x: number): number {
+export function normalCDF(x: number): number {
   const a1 = 0.254829592;
   const a2 = -0.284496736;
   const a3 = 1.421413741;

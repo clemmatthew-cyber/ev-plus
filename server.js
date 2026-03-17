@@ -292,9 +292,21 @@ const NBA_STATS_HEADERS = {
   "x-nba-stats-token": "true",
 };
 
+/** Derive current NBA season string (e.g. "2025-26") from today's date.
+ *  NBA season starts in October, so Oct-Dec belongs to currentYear-nextYear. */
+function currentNbaSeason() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0-indexed: 0=Jan, 9=Oct
+  const startYear = m >= 9 ? y : y - 1; // Oct+ = new season
+  const endYear = (startYear + 1) % 100;
+  return `${startYear}-${String(endYear).padStart(2, "0")}`;
+}
+
 async function fetchNbaLeagueStats(extraParams = "") {
   const base = "https://stats.nba.com/stats/leaguedashteamstats";
-  const params = `Season=2025-26&SeasonType=Regular+Season&MeasureType=Advanced&PerMode=PerGame${extraParams}`;
+  const season = currentNbaSeason();
+  const params = `Season=${season}&SeasonType=Regular+Season&MeasureType=Advanced&PerMode=PerGame${extraParams}`;
   const url = `${base}?${params}`;
   const resp = await fetch(url, { headers: NBA_STATS_HEADERS });
   if (!resp.ok) throw new Error(`NBA API ${resp.status}`);
