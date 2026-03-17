@@ -1,7 +1,6 @@
 // ─── EV Engine v4 — Sport-Aware Router ───
 // NHL  → full Poisson xG model (stats + goalies + situation splits)
 // NCAAB → Torvik efficiency model + devig, with tournament adjustments
-// MMA  → Elo + fighter stat differentials model + devig
 // NBA  → pure devig model (odds-only, consensus fair prob)
 
 import type { EvBet } from "./types";
@@ -12,9 +11,6 @@ import { NCAAB_CONFIG } from "./model/ncaab-config";
 import { generateNcaabEvBets } from "./model/ncaab-engine";
 import { fetchTorvikStats } from "./stats/torvik";
 import { clearTeamLastGameTime } from "./model/tournament";
-import { MMA_CONFIG } from "./model/mma-config";
-import { generateMmaEvBets } from "./model/mma-engine";
-import { fetchUfcStats, enrichFighterDetails } from "./stats/ufcstats";
 import { fetchRecentSchedule } from "./schedule";
 
 // Backend proxy base: replaced by deploy_website with proxy path to port 5000
@@ -107,31 +103,6 @@ export async function runPipeline(
       // Torvik fetch failed — fall back to devig-only
     }
     bets = generateNcaabEvBets(games, { ...config, ...NCAAB_CONFIG }, torvikStats);
-  } else if (sport === "mma") {
-    // MMA → Elo + fighter stats model + devig, with graceful fallback
-    let fighterStats: Map<string, import("./stats/ufcstats").FighterStats> | null = null;
-    try {
-      fighterStats = await fetchUfcStats();
-    } catch {
-      // UFCStats fetch failed — fall back to devig-only
-    }
-
-    // Enrich with fight history + DOB for fighters in current matchups
-    if (fighterStats) {
-      try {
-        const names = new Set(games.flatMap(g => [g.homeTeam, g.awayTeam]));
-        await enrichFighterDetails(fighterStats, names);
-      } catch {
-        // Enrichment failed — proceed with career stats only
-      }
-    }
-
-    try {
-      bets = generateMmaEvBets(games, { ...config, ...MMA_CONFIG }, fighterStats);
-    } catch (err) {
-      console.error('[Engine] MMA pipeline failed:', err);  // M-10
-      bets = [];
-    }
   } else {
     // NBA and any future sport → devig model
     bets = generateNbaEvBets(games, config);

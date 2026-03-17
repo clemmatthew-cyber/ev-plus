@@ -3,7 +3,7 @@
 
 import { createContext, useContext } from "react";
 
-export type Sport = "nhl" | "nba" | "mma" | "ncaab";
+export type Sport = "nhl" | "nba" | "ncaab";
 export type OddsFormat = "american" | "decimal";
 
 export interface Settings {
@@ -93,7 +93,6 @@ export const SPORTS: { key: Sport; label: string; enabled: boolean }[] = [
   { key: "nhl", label: "NHL", enabled: true },
   { key: "nba", label: "NBA", enabled: true },
   { key: "ncaab", label: "NCAAB", enabled: true },
-  { key: "mma", label: "MMA", enabled: true },
 ];
 
 // ─── Odds formatter ───

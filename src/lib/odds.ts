@@ -71,7 +71,6 @@ async function tryFetchOdds(sport: string): Promise<GameOdds[] | null> {
 
 // M-6: Sport-specific market optimization
 const SPORT_MARKETS: Record<string, string> = {
-  mma: 'h2h',
   nhl: 'h2h,spreads,totals',
   nba: 'h2h,spreads,totals',
   ncaab: 'h2h,spreads,totals',
@@ -196,11 +195,6 @@ const ABBREVS: Record<string, string> = {
   "Portland Trail Blazers":"POR","Sacramento Kings":"SAC","San Antonio Spurs":"SAS",
   "Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS",
 };
-// M-7: Sport-aware team abbreviation (MMA uses last name)
 export const teamAbbrev = (name: string, _sport?: string) => {
-  if (_sport === 'mma') {
-    const parts = name.split(' ');
-    return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : name.toUpperCase();
-  }
   return ABBREVS[name] || name.split(" ").pop()?.toUpperCase().slice(0, 3) || "???";
 };

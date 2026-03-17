@@ -17,9 +17,9 @@ export default function Board() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<string>("");
   const [marketFilter, setMarketFilter] = useState<MarketFilter>("all");
-  const [sortBy, setSortBy] = useState<SortBy>("edge");
+  const [sortBy, setSortBy] = useState<SortBy>("confidence");
   const [showAll, setShowAll] = useState(false);
-  const [dayFilter, setDayFilter] = useState<DayFilter>("all");
+  const [dayFilter, setDayFilter] = useState<DayFilter>(fmtDate(new Date(), "yyyy-MM-dd"));
   const firstLoad = useRef(true);
 
   // Request notification permission once
@@ -162,13 +162,6 @@ export default function Board() {
           {lastSync && <span className="text-[10px] text-[#737373] font-mono hidden sm:block">sync {lastSync}</span>}
         </div>
       </div>
-
-      {/* MMA model limitation banner */}
-      {sport === "mma" && (
-        <div className="text-xs text-amber-400/80 bg-amber-400/10 px-3 py-1.5 rounded mb-0 text-center mx-4 mt-2">
-          MMA: Market devig model only — fighter statistical model coming soon
-        </div>
-      )}
 
       {/* Column header */}
       <div className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-medium text-[#737373] uppercase tracking-wider border-b border-white/[0.03] sm:gap-3 sm:px-4 max-w-3xl">

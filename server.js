@@ -93,11 +93,10 @@ const SPORT_KEYS = {
   nhl: "icehockey_nhl",
   nba: "basketball_nba",
   ncaab: "basketball_ncaab",
-  mma: "mma_mixed_martial_arts",
 };
 
 // ─── /api/odds ───
-// Proxies The Odds API — supports ?sport=nhl|nba|mma (default nhl)
+// Proxies The Odds API — supports ?sport=nhl|nba|ncaab (default nhl)
 // Per-sport cache so switching sports doesn't nuke the other cache.
 
 const oddsCache = new Map(); // sportKey → { data, ts }
@@ -1324,24 +1323,6 @@ app.post("/api/tournament-performance/compute", (req, res) => {
     res.json({ ok: true, computed: tournBets.length });
   } catch (err) {
     res.status(500).json({ error: "Failed to compute tournament performance", detail: err.message });
-  }
-});
-
-// ─── MMA fighter stats diagnostic ───
-
-app.get("/api/mma/fighters", async (req, res) => {
-  try {
-    // Import dynamically since it's a TS module compiled to dist
-    const stats = await import("./dist/lib/stats/ufcstats.js");
-    const map = await stats.fetchUfcStats();
-    const fighters = [...map.values()].sort((a, b) => {
-      const aTotal = a.wins + a.losses + a.draws;
-      const bTotal = b.wins + b.losses + b.draws;
-      return bTotal - aTotal;
-    });
-    res.json({ count: fighters.length, fighters: fighters.slice(0, 100) });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
   }
 });
 
