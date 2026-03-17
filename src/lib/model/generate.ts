@@ -318,7 +318,6 @@ export function generateEvBets(input: GenerateInput): EvBet[] {
           mp = isOver ? simTotal.over : simTotal.under;
         } else {
           // Fix 6: Apply empty-net boost to Poisson grid path
-          const adjustedTotalLam = homeLam + awayLam + enBoost;
           const halfBoost = enBoost / 2;
           mp = totalProb(homeLam + halfBoost, awayLam + halfBoost, line, isOver, max);
         }
