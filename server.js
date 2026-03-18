@@ -74,7 +74,6 @@ const SPORT_KEYS = {
   nhl: "icehockey_nhl",
   nba: "basketball_nba",
   ncaab: "basketball_ncaab",
-  mma: "mma_mixed_martial_arts",
 };
 
 // ─── /api/odds ───
@@ -703,6 +702,168 @@ app.get("/api/health", (_req, res) => {
     uptime: Math.round(process.uptime()),
   });
 });
+
+// ─── /api/health/deep — Comprehensive Self-Health Check ───
+
+app.get("/api/health/deep", async (_req, res) => {
+  const checks = {};
+  let allOk = true;
+
+  // 1. Database connectivity & integrity
+  try {
+    const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+    const expectedTables = ["bankroll", "bets", "games", "model_results", "odds_history",
+      "prediction_outcomes", "model_params", "recalibration_runs", "parameter_history",
+      "prediction_evaluations", "sportsbook_consensus", "sharp_moves", "book_sharpness",
+      "alerts", "goalie_confirmations"];
+    const existingTables = new Set(tableCheck.map(t => t.name));
+    const missingTables = expectedTables.filter(t => !existingTables.has(t));
+    const gameCount = db.prepare("SELECT COUNT(*) as cnt FROM games").get().cnt;
+    const betCount = db.prepare("SELECT COUNT(*) as cnt FROM bets").get().cnt;
+    const predCount = db.prepare("SELECT COUNT(*) as cnt FROM prediction_outcomes").get().cnt;
+    const modelResultCount = db.prepare("SELECT COUNT(*) as cnt FROM model_results").get().cnt;
+    checks.database = {
+      status: missingTables.length === 0 ? "ok" : "degraded",
+      tables: existingTables.size,
+      missingTables: missingTables.length > 0 ? missingTables : undefined,
+      rows: { games: gameCount, bets: betCount, predictions: predCount, modelResults: modelResultCount },
+    };
+    if (missingTables.length > 0) allOk = false;
+  } catch (err) {
+    checks.database = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  // 2. Odds API connectivity & quota
+  try {
+    const quotaUrl = `https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}`;
+    const quotaRes = await fetch(quotaUrl);
+    const remaining = quotaRes.headers.get("x-requests-remaining");
+    const used = quotaRes.headers.get("x-requests-used");
+    checks.oddsApi = {
+      status: quotaRes.ok ? "ok" : "error",
+      httpStatus: quotaRes.status,
+      requestsRemaining: remaining ? parseInt(remaining) : null,
+      requestsUsed: used ? parseInt(used) : null,
+    };
+    if (!quotaRes.ok) allOk = false;
+    if (remaining && parseInt(remaining) < 50) {
+      checks.oddsApi.status = "warning";
+      checks.oddsApi.warning = "Low API quota";
+    }
+  } catch (err) {
+    checks.oddsApi = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  // 3. NHL API (MoneyPuck + NHL scores)
+  try {
+    const mpUrl = `https://moneypuck.com/moneypuck/playerData/seasonSummary/${currentNHLSeason()}/regular/teams.csv`;
+    const mpRes = await fetch(mpUrl, { signal: AbortSignal.timeout(10000) });
+    checks.moneyPuck = { status: mpRes.ok ? "ok" : "error", httpStatus: mpRes.status };
+    if (!mpRes.ok) allOk = false;
+  } catch (err) {
+    checks.moneyPuck = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const nhlRes = await fetch(`https://api-web.nhle.com/v1/score/${today}`, { signal: AbortSignal.timeout(10000) });
+    checks.nhlApi = { status: nhlRes.ok ? "ok" : "error", httpStatus: nhlRes.status };
+    if (!nhlRes.ok) allOk = false;
+  } catch (err) {
+    checks.nhlApi = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  // 4. Prediction learning pipeline health
+  try {
+    const unresolvedGames = db.prepare(
+      "SELECT COUNT(*) as cnt FROM games WHERE game_state != 'final' AND commence_time < datetime('now', '-4 hours')"
+    ).get().cnt;
+    const ungradedPreds = db.prepare(
+      "SELECT COUNT(*) as cnt FROM prediction_outcomes WHERE actual_outcome IS NULL AND game_id IN (SELECT id FROM games WHERE game_state = 'final')"
+    ).get().cnt;
+    const lastGraded = db.prepare(
+      "SELECT MAX(resolved_at) as ts FROM prediction_outcomes WHERE actual_outcome IS NOT NULL"
+    ).get().ts;
+    checks.predictionPipeline = {
+      status: unresolvedGames > 20 || ungradedPreds > 50 ? "warning" : "ok",
+      unresolvedGames,
+      ungradedPredictions: ungradedPreds,
+      lastGradedAt: lastGraded || "never",
+    };
+    if (unresolvedGames > 20) checks.predictionPipeline.warning = `${unresolvedGames} games past 4h still unresolved`;
+  } catch (err) {
+    checks.predictionPipeline = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  // 5. Recalibration engine health
+  try {
+    const lastRecal = db.prepare(
+      "SELECT * FROM recalibration_runs ORDER BY created_at DESC LIMIT 1"
+    ).get();
+    const paramCount = db.prepare("SELECT COUNT(*) as cnt FROM model_params").get().cnt;
+    checks.recalibration = {
+      status: "ok",
+      lastRun: lastRecal ? {
+        status: lastRecal.status,
+        createdAt: lastRecal.created_at,
+        sampleSize: lastRecal.sample_size,
+        paramsChanged: lastRecal.params_changed,
+        compositeScore: lastRecal.composite_score_after,
+      } : "never",
+      activeParams: paramCount,
+    };
+    if (lastRecal && lastRecal.status === "error") {
+      checks.recalibration.status = "warning";
+    }
+  } catch (err) {
+    checks.recalibration = { status: "error", error: err.message };
+    allOk = false;
+  }
+
+  // 6. Cache freshness
+  checks.caches = {
+    status: "ok",
+    oddsSports: oddsCache.size,
+    statsFresh: isFresh(cache.stats),
+    goaliesFresh: isFresh(cache.goalies),
+    scoresEntries: scoresCache.size,
+  };
+
+  // 7. Memory & process health
+  const mem = process.memoryUsage();
+  checks.process = {
+    status: "ok",
+    uptimeSeconds: Math.round(process.uptime()),
+    uptimeHuman: formatUptime(process.uptime()),
+    heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+    heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+    rssMB: Math.round(mem.rss / 1024 / 1024),
+    nodeVersion: process.version,
+  };
+  if (mem.heapUsed / mem.heapTotal > 0.9) {
+    checks.process.status = "warning";
+    checks.process.warning = "Heap usage above 90%";
+    allOk = false;
+  }
+
+  res.status(allOk ? 200 : 503).json({
+    ok: allOk,
+    checkedAt: new Date().toISOString(),
+    checks,
+  });
+});
+
+function formatUptime(seconds) {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${d}d ${h}h ${m}m`;
+}
 
 // ─── /api/predictions (learning pipeline) ───
 
@@ -1403,24 +1564,6 @@ app.post("/api/tournament-performance/compute", (req, res) => {
   }
 });
 
-// ─── MMA fighter stats diagnostic ───
-
-app.get("/api/mma/fighters", async (req, res) => {
-  try {
-    // Import dynamically since it's a TS module compiled to dist
-    const stats = await import("./dist/lib/stats/ufcstats.js");
-    const map = await stats.fetchUfcStats();
-    const fighters = [...map.values()].sort((a, b) => {
-      const aTotal = a.wins + a.losses + a.draws;
-      const bTotal = b.wins + b.losses + b.draws;
-      return bTotal - aTotal;
-    });
-    res.json({ count: fighters.length, fighters: fighters.slice(0, 100) });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
 // ─── Static files (React dist) ───
 
 app.use(express.static(join(__dirname, "dist")));
@@ -1430,7 +1573,7 @@ app.get("/{*splat}", (_req, res) => {
 
 // ─── Start ───
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[server] NHL EV+ running on http://localhost:${PORT} (SQLite persistence)`);
 });
 
@@ -1455,8 +1598,13 @@ function maybeRunWeeklyRecalibration() {
   }
 }
 
-setTimeout(maybeRunWeeklyRecalibration, 30000);
-setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000);
+// Store timer references for graceful shutdown
+const timers = {
+  recalStartup: setTimeout(maybeRunWeeklyRecalibration, 30000),
+  recalInterval: setInterval(maybeRunWeeklyRecalibration, 24 * 60 * 60 * 1000),
+  predLearnStartup: null,
+  predLearnInterval: null,
+};
 
 // ─── Prediction Learning Pipeline Timers ───
 // Resolve game scores every 30 min, grade predictions 5 min later
@@ -1479,5 +1627,42 @@ async function runPredictionLearning() {
   }, 5000);
 }
 
-setTimeout(runPredictionLearning, 60000); // 1 min after startup
-setInterval(runPredictionLearning, 30 * 60 * 1000); // every 30 min
+timers.predLearnStartup = setTimeout(runPredictionLearning, 60000);
+timers.predLearnInterval = setInterval(runPredictionLearning, 30 * 60 * 1000);
+
+// ─── Graceful Shutdown ───
+
+function gracefulShutdown(signal) {
+  console.log(`[server] ${signal} received — shutting down gracefully...`);
+
+  // 1. Stop accepting new connections
+  server.close(() => {
+    console.log("[server] HTTP server closed");
+  });
+
+  // 2. Clear all timers
+  for (const [name, id] of Object.entries(timers)) {
+    if (id) {
+      clearTimeout(id);
+      clearInterval(id);
+    }
+  }
+  console.log("[server] Timers cleared");
+
+  // 3. Close database
+  try {
+    db.close();
+    console.log("[server] Database closed");
+  } catch {
+    // db.close may not exist if using raw prepare statements
+  }
+
+  // 4. Exit after a brief grace period for in-flight requests
+  setTimeout(() => {
+    console.log("[server] Process exiting");
+    process.exit(0);
+  }, 3000);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

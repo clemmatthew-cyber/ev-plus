@@ -4,6 +4,8 @@
 
 import * as db from "./db.js";
 
+let lastBackfillTs = 0;
+
 // ─── Resolve Game Scores ───
 // Fetches final scores for games that have started but aren't marked final.
 // Updates the games table — this is INDEPENDENT of bet resolution.
@@ -124,12 +126,80 @@ export async function resolveGameScores() {
     }
   }
 
-  // ── NCAAB: Similar approach (scores from ESPN or NCAA API) ──
-  // NCAAB games are graded the same way if scores are available in games table
-  // For now we rely on games being updated through other means
+  // ── NCAAB: Fetch from ESPN API ──
+  if (ncaabGames.length > 0) {
+    const dates = new Set();
+    for (const g of ncaabGames) {
+      // ESPN uses YYYYMMDD format
+      dates.add(g.commence_time.split("T")[0].replace(/-/g, ""));
+    }
+
+    for (const date of dates) {
+      try {
+        const res = await fetch(
+          `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${date}&limit=200`,
+          { signal: AbortSignal.timeout(15000) }
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+        const events = data?.events ?? [];
+
+        for (const ev of events) {
+          const comp = ev.competitions?.[0];
+          if (!comp || comp.status?.type?.completed !== true) continue;
+
+          const teams = comp.competitors ?? [];
+          const home = teams.find(t => t.homeAway === "home");
+          const away = teams.find(t => t.homeAway === "away");
+          if (!home || !away) continue;
+
+          const homeScore = parseInt(home.score);
+          const awayScore = parseInt(away.score);
+          if (isNaN(homeScore) || isNaN(awayScore)) continue;
+
+          const homeName = home.team?.displayName || home.team?.shortDisplayName || "";
+          const awayName = away.team?.displayName || away.team?.shortDisplayName || "";
+          const homeAbbrev = home.team?.abbreviation || "";
+          const awayAbbrev = away.team?.abbreviation || "";
+
+          // Match by checking if our stored team name contains or matches the ESPN team name
+          const dateDashes = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+          const match = ncaabGames.find(g => {
+            if (!g.commence_time.startsWith(dateDashes)) return false;
+            // Fuzzy match: Odds API uses full names, ESPN has abbreviations + display names
+            const h = g.home_team.toLowerCase();
+            const a = g.away_team.toLowerCase();
+            return (
+              (h.includes(homeName.toLowerCase()) || homeName.toLowerCase().includes(h) ||
+               h.includes(homeAbbrev.toLowerCase())) &&
+              (a.includes(awayName.toLowerCase()) || awayName.toLowerCase().includes(a) ||
+               a.includes(awayAbbrev.toLowerCase()))
+            );
+          });
+          if (!match) continue;
+
+          db.updateGame({
+            id: match.id,
+            home_score: homeScore,
+            away_score: awayScore,
+            period_type: null,
+            game_state: "final",
+          });
+          resolved++;
+        }
+      } catch (err) {
+        console.error(`[PredGrader] NCAAB score fetch failed for ${date}:`, err.message);
+      }
+    }
+  }
 
   // ── Backfill: populate prediction_outcomes from model_results ──
-  backfillFromModelResults();
+  // Only run if we haven't backfilled in the last 6 hours
+  const now = Date.now();
+  if (!lastBackfillTs || now - lastBackfillTs > 6 * 60 * 60 * 1000) {
+    backfillFromModelResults();
+    lastBackfillTs = now;
+  }
 
   console.log(`[PredGrader] Resolved ${resolved} game scores`);
   return { resolved };
@@ -139,7 +209,6 @@ export async function resolveGameScores() {
 // One-time + ongoing: for any model_results rows without a matching prediction_outcome, insert them.
 
 function backfillFromModelResults() {
-  const existingGameIds = new Set(db.getExistingPredictionOutcomeGameIds());
   const allResults = db.getAllModelResults();
 
   // De-dup model_results by (game_id, market, outcome) — keep latest snapshot
