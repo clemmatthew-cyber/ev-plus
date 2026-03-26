@@ -215,6 +215,7 @@ export function runRecalibration(triggerType = "manual") {
     sample_size: 0,
   });
 
+  try {
   // 2. Gather historical data — ALL predictions, not just booked bets
   const allPredictions = db.getAllResolvedPredictionOutcomes();
   const nonPush = allPredictions.filter(e => e.actual_outcome !== -1);
@@ -346,4 +347,19 @@ export function runRecalibration(triggerType = "manual") {
     compositeScoreAfter: final.composite,
     duration,
   };
+
+  } catch (err) {
+    // Mark run as error so it doesn't stay stuck in "running" forever
+    try {
+      db.updateRecalibrationRun({
+        id: runId,
+        status: "error",
+        sample_size: 0,
+        notes: `Error: ${err.message}`,
+        completed_at: new Date().toISOString(),
+      });
+    } catch { /* best-effort cleanup */ }
+    console.error(`[RECAL] Run ${runId} failed:`, err.message);
+    return { ok: false, reason: err.message, runId };
+  }
 }

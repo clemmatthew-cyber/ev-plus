@@ -19,8 +19,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 function currentNHLSeason() {
   const now = new Date();
   const year = now.getFullYear();
-  // NHL season spans Oct-Jun; if before September, it's the current year's season
-  return now.getMonth() < 8 ? year : year + 1;
+  // NHL season spans Oct-Jun; MoneyPuck uses the starting year (e.g., 2025 for 2025-26)
+  // Before September → still in prior year's season; Sep+ → new season started
+  return now.getMonth() < 8 ? year - 1 : year;
 }
 
 const app = express();
